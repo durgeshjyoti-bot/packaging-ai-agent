@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Teaser soundtrack</title>
+<script>
+// Soundtrack composed in code. 120 BPM, A minor, 15 s. Rendered with OfflineAudioContext.
+window.renderTrack = async function(){
+  // 0.25 s of pre-roll so the compressor and reverb are settled on the first downbeat; trimmed after rendering
+  const SR = 48000, LEN = 15, PRE = 0.25, B = 0.5, bt = b => b * B + PRE;
+  const ctx = new OfflineAudioContext(2, Math.round(SR * (LEN + PRE + 0.006)), SR);
+
+  // master: bus -> compressor -> out ; reverb send
+  const master = ctx.createGain(); master.gain.value = 0.8;
+  const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.12; comp.knee.value = 6;
+  master.connect(comp).connect(ctx.destination);
+  const rev = ctx.createConvolver(); {
+    const n = SR * 2.4, ir = ctx.createBuffer(2, n, SR);
+    for (let c = 0; c < 2; c++){ const d = ir.getChannelData(c); let s = 12345 + c*999;
+      for (let i = 0; i < n; i++){ s = (s * 1103515245 + 12345) & 0x7fffffff; d[i] = ((s / 0x7fffffff) * 2 - 1) * Math.pow(1 - i/n, 3.2); } }
+    rev.buffer = ir; }
+  const revIn = ctx.createGain(); revIn.gain.value = 0.32; revIn.connect(rev).connect(master);
+  // sidechain bus: ducks on every kick
+  const duck = ctx.createGain(); duck.connect(master);
+
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const noiseBuf = (() => { const b = ctx.createBuffer(1, SR * 3, SR), d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = rnd()*2 - 1; return b; })();
+  const noise = (t, dur) => { const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.start(t, rnd() * 1.5, dur + 0.05); return s; };
+  const env = (g, t, a, peak, d, end = 0.0001) => { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(end, t + a + d); };
+  const note = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  function kick(t, big = 1){
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(150 * big, t); o.frequency.exponentialRampToValueAtTime(46, t + 0.11);
+    env(g, t, 0.002, 0.95, 0.42); o.connect(g).connect(master); o.start(t); o.stop(t + 0.5);
+    const n = noise(t, 0.02), hp = ctx.createBiquadFilter(), ng = ctx.createGain(); hp.type = 'highpass'; hp.frequency.value = 3000;
+    env(ng, t, 0.001, 0.25, 0.015); n.connect(hp).connect(ng).connect(master);
+    // duck the music bus
+    duck.gain.setValueAtTime(0.35, t); duck.gain.linearRampToValueAtTime(1, t + 0.28);
+  }
+  function clap(t){
+    for (let k = 0; k < 3; k++){ const tt = t + k * 0.011, n = noise(tt, 0.2), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+      bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.1; env(g, tt, 0.001, k === 2 ? 0.55 : 0.3, k === 2 ? 0.16 : 0.012);
+      n.connect(bp).connect(g); g.connect(duck); g.connect(revIn); }
+  }
+  function hat(t, v = 0.16, d = 0.035){
+    const n = noise(t, d + 0.02), hp = ctx.createBiquadFilter(), g = ctx.createGain(); hp.type = 'highpass'; hp.frequency.value = 8000;
+    env(g, t, 0.001, v, d); n.connect(hp).connect(g).connect(duck);
+  }
+  function bass(t, m, d = 0.22){
+    const o = ctx.createOscillator(), o2 = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+    o.type = 'sawtooth'; o2.type = 'square'; o.frequency.value = note(m); o2.frequency.value = note(m - 12);
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(220, t + d); lp.Q.value = 3;
+    env(g, t, 0.005, 0.7, d); o.connect(lp); o2.connect(lp); lp.connect(g).connect(duck);
+    o.start(t); o2.start(t); o.stop(t + d + 0.05); o2.stop(t + d + 0.05);
+  }
+  function stab(t, notes, v = 0.26, d = 0.35){
+    notes.forEach((m, i) => { [-7, 7].forEach(det => {
+      const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+      o.type = 'sawtooth'; o.frequency.value = note(m); o.detune.value = det;
+      lp.type = 'lowpass'; lp.frequency.setValueAtTime(4200, t); lp.frequency.exponentialRampToValueAtTime(500, t + d);
+      env(g, t, 0.004, v / notes.length, d); o.connect(lp).connect(g); g.connect(duck); g.connect(revIn); o.start(t); o.stop(t + d + 0.05); }); });
+  }
+  function pad(t, notes, d, v = 0.1){
+    notes.forEach(m => [-9, 0, 9].forEach(det => {
+      const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+      o.type = 'sawtooth'; o.frequency.value = note(m); o.detune.value = det; lp.type = 'lowpass'; lp.frequency.value = 1400;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v / notes.length / 3 * 3, t + 0.06);
+      g.gain.setValueAtTime(v / notes.length, t + d - 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      o.connect(lp).connect(g); g.connect(duck); g.connect(revIn); o.start(t); o.stop(t + d + 0.05); }));
+  }
+  function hit(t, big = false){ // scene change: low thump + noise burst + short sweep
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(big ? 110 : 90, t); o.frequency.exponentialRampToValueAtTime(big ? 28 : 38, t + (big ? 1.2 : 0.35));
+    env(g, t, 0.003, big ? 0.9 : 0.55, big ? 1.6 : 0.45); o.connect(g).connect(master); o.start(t); o.stop(t + 1.8);
+    const n = noise(t, big ? 1.6 : 0.4), bp = ctx.createBiquadFilter(), ng = ctx.createGain();
+    bp.type = 'bandpass'; bp.frequency.setValueAtTime(big ? 5000 : 3200, t); bp.frequency.exponentialRampToValueAtTime(400, t + (big ? 1.4 : 0.3)); bp.Q.value = 0.6;
+    env(ng, t, 0.002, big ? 0.6 : 0.32, big ? 1.4 : 0.3); n.connect(bp).connect(ng); ng.connect(master); ng.connect(revIn);
+  }
+  function whoosh(t, d = 0.28, v = 0.18){ // box morph
+    const n = noise(t - d, d + 0.05), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    bp.type = 'bandpass'; bp.Q.value = 2.2; bp.frequency.setValueAtTime(500, t - d); bp.frequency.exponentialRampToValueAtTime(5000, t);
+    g.gain.setValueAtTime(0.0001, t - d); g.gain.exponentialRampToValueAtTime(v, t - 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    n.connect(bp).connect(g).connect(master);
+  }
+  function click(t, f = 2400, v = 0.22){ // UI click
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'square'; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 0.5, t + 0.02);
+    env(g, t, 0.001, v, 0.025); o.connect(g).connect(master); o.start(t); o.stop(t + 0.06);
+  }
+  function tick(t, f){ const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'; o.frequency.value = f; env(g, t, 0.001, 0.2, 0.07); o.connect(g); g.connect(master); g.connect(revIn); o.start(t); o.stop(t + 0.1); }
+  function riser(t0, t1){
+    const n = noise(t0, t1 - t0), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    bp.type = 'bandpass'; bp.Q.value = 1.4; bp.frequency.setValueAtTime(300, t0); bp.frequency.exponentialRampToValueAtTime(7000, t1);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.28, t1 - 0.02); g.gain.linearRampToValueAtTime(0.0001, t1);
+    n.connect(bp).connect(g); g.connect(master); g.connect(revIn);
+    const o = ctx.createOscillator(), og = ctx.createGain(); o.type = 'sawtooth'; o.frequency.setValueAtTime(110, t0); o.frequency.exponentialRampToValueAtTime(880, t1);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2000;
+    og.gain.setValueAtTime(0.0001, t0); og.gain.exponentialRampToValueAtTime(0.06, t1 - 0.02); og.gain.linearRampToValueAtTime(0.0001, t1);
+    o.connect(lp).connect(og).connect(duck); o.start(t0); o.stop(t1);
+  }
+
+  // ---------- arrangement ----------
+  // chords per bar (MIDI): Am, F, C, G | Am, F->G | Am
+  const AM = [57, 60, 64], F = [53, 57, 60], C = [55, 60, 64], G = [55, 59, 62];
+  const roots = b => b < 4 ? 45 : b < 8 ? 41 : b < 12 ? 48 : b < 16 ? 43 : b < 20 ? 45 : b < 22 ? 41 : b < 24 ? 43 : 45;
+  const chordAt = b => b < 4 ? AM : b < 8 ? F : b < 12 ? C : b < 16 ? G : b < 20 ? AM : b < 22 ? F : b < 24 ? G : AM;
+
+  for (let b = 0; b < 30; b++) kick(bt(b), b === 24 ? 1.25 : 1);       // kick on every beat
+  for (let b = 5; b < 24; b += 2) clap(bt(b));
+  for (let b = 25; b < 30; b += 2) clap(bt(b));
+  for (let b = 4; b < 20; b++) hat(bt(b) + 0.25);
+  for (let s = 20 * 4; s < 24 * 4; s++) hat(bt(s / 4), s % 2 ? 0.1 : 0.16, 0.025);       // build: 16ths
+  for (let b = 24; b < 30; b++) { hat(bt(b) + 0.25, 0.2, 0.09); }
+  // hook: a held chord under the type, so the bar breathes
+  pad(bt(0), [45, 57, 60, 64], 2.05, 0.16);
+  // bass: off-beat 8ths from bar 2, straight 8ths in the build
+  for (let b = 4; b < 24; b++){ bass(bt(b) + 0.25, roots(b)); if (b >= 20) bass(bt(b), roots(b), 0.18); }
+  for (let b = 24; b < 29; b++) bass(bt(b) + 0.25, 45, 0.24);
+  // chord stabs on the change beats and the 'and' of 3
+  [4, 8, 12, 16].forEach(b => { stab(bt(b), chordAt(b), 0.3); stab(bt(b + 2) + 0.25, chordAt(b), 0.18, 0.2); });
+  [20, 21, 22, 23].forEach(b => stab(bt(b), chordAt(b), 0.2, 0.18));
+  // scene changes: hit + whoosh for the box's move
+  [4, 8, 12, 16, 20].forEach(b => { hit(bt(b)); whoosh(bt(b)); });
+  hit(bt(2.5)); click(bt(2.5), 1600, 0.25);            // the box interrupts the hook
+  riser(bt(20), bt(24));
+  hit(bt(24), true);                                      // the catch: biggest beat
+  whoosh(bt(25), 0.2, 0.14); hit(bt(25));                 // box becomes the icon
+  pad(bt(24), [45, 57, 60, 64, 71], 3.05, 0.24);           // payoff chord rings to the end
+  // UI: cursor clicks, file drop, blink ticks, text read
+  [6, 9, 14, 17].forEach(b => click(bt(b)));
+  tick(bt(6) + 0.05, 660);
+  [9, 10, 11].forEach((b, i) => tick(bt(b), i % 2 ? 1320 : 990));
+  [20.5, 21.5, 22, 22.5, 23, 23.25, 23.5, 23.75].forEach((b, i) => tick(bt(b), i % 2 ? 1320 : 990));
+  for (let i = 0; i < 12; i++) click(bt(17.7) + i * 0.03, 3200, 0.05);
+  [26, 27, 28].forEach(b => tick(bt(b), 1760));
+
+  const buf = await ctx.startRendering();
+  const cut = Math.round((PRE + 0.006) * SR); // also absorbs the compressor lookahead
+  return [Array.from(buf.getChannelData(0).subarray(cut)), Array.from(buf.getChannelData(1).subarray(cut))];
+};
+window.ready = true;
+</script>

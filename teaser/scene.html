@@ -1,0 +1,595 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Proof Checker for Mac — teaser</title>
+<style>
+/* Every animated value is set from window.seek(t). No CSS animations, transitions or timers. */
+@font-face{font-family:"Barlow Condensed";font-weight:500;src:url(fonts/BarlowCondensed-500.woff2) format("woff2")}
+@font-face{font-family:"Barlow Condensed";font-weight:600;src:url(fonts/BarlowCondensed-600.woff2) format("woff2")}
+@font-face{font-family:"Barlow Condensed";font-weight:700;src:url(fonts/BarlowCondensed-700.woff2) format("woff2")}
+@font-face{font-family:"Public Sans";font-weight:400 700;src:url(fonts/PublicSans-400.woff2) format("woff2")}
+:root{
+  --paper:#f6f7f8; --sheet:#ffffff; --ink:#15191d; --ink-2:#4b5560; --rule:#d9dee3; --accent:#0a6f8f;
+  --booth:#0d0f11; --booth-bar:#181b1f; --booth-line:#2c3238; --booth-fg:#e9edf0; --booth-dim:#9aa4ad;
+  --display:"Barlow Condensed",sans-serif; --ui:"Public Sans",sans-serif; --mono:"JetBrains Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--paper)}
+#stage{position:absolute;inset:0;overflow:hidden;background:var(--paper)}
+#cam{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
+.comp{position:absolute;left:0;top:0;width:1920px;height:1080px}
+.abs{position:absolute}
+.mask{display:block;overflow:hidden;padding:0 .04em}
+.mask>.in{display:block}
+.imask{display:inline-block;overflow:hidden;vertical-align:top}
+.imask>.in{display:inline-block}
+
+/* ---------- hook ---------- */
+.hook-line{font-family:var(--display);font-weight:700;font-size:232px;line-height:.86;color:var(--ink);letter-spacing:-.005em;text-transform:uppercase}
+.hook-line .w{display:inline-block}
+
+/* ---------- product UI rebuilt as vector layers (scaled from the real layout) ---------- */
+.card{background:var(--sheet);border:2px solid var(--rule);border-radius:12px}
+.label{font-family:var(--ui);font-weight:600;font-size:21px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.drop{position:absolute;border:3px dashed var(--rule);border-radius:10px;padding:20px}
+.thumb{position:absolute;left:20px;right:20px;top:62px;height:176px;background:var(--paper);border-radius:6px;overflow:hidden}
+.fname{position:absolute;left:20px;right:20px;bottom:18px;font-family:var(--mono);font-size:21px;color:var(--ink-2);white-space:nowrap}
+.btn{position:absolute;display:flex;align-items:center;justify-content:center;font-family:var(--ui);font-weight:600;border:2px solid var(--rule);background:var(--sheet);color:var(--ink);border-radius:8px;white-space:nowrap}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+.caption{font-family:var(--display);font-weight:600;font-size:124px;line-height:.95;color:var(--ink);text-transform:none}
+.chip{display:inline-block;width:24px;height:24px;border-radius:50%}
+
+/* artwork (the customer's carton, rebuilt from the app's sample job) */
+.art{position:absolute;left:0;top:0;width:1000px;height:700px;background:#fbfaf5;transform-origin:0 0;overflow:hidden;font-family:"Liberation Sans",Arial,sans-serif;color:#1b2a1e}
+.art .band{position:absolute;left:0;top:0;width:1000px;height:150px;background:#2f6b3a}
+.art .organic{position:absolute;left:60px;top:22px;font-weight:700;font-size:84px;color:#fff;line-height:1}
+.art .title{position:absolute;left:60px;top:186px;font-family:"Liberation Serif",Georgia,serif;font-weight:700;font-size:64px;line-height:1}
+.art .net{position:absolute;left:60px;top:279px;font-size:34px;line-height:1;white-space:nowrap}
+.art .copy{position:absolute;left:60px;top:383px;font-size:22px;line-height:36px}
+.art .seal{position:absolute;left:725px;top:205px;width:190px;height:190px;border-radius:50%;background:#c8a24a;color:#fff;text-align:center;font-weight:700}
+.art .seal b{position:absolute;left:0;right:0;top:60px;font-size:34px}
+.art .seal i{position:absolute;left:0;right:0;top:104px;font-size:22px;font-style:normal;font-weight:400}
+.art .burst{position:absolute;left:810px;top:520px;width:140px;height:140px}
+.art .bars{position:absolute;left:60px;top:540px;height:110px}
+.art .ean{position:absolute;left:60px;top:656px;font-family:var(--mono);font-size:18px}
+
+.mark{position:absolute;border:3px solid var(--ink);border-radius:2px}
+.mark .n{position:absolute;left:-3px;top:-27px;height:24px;min-width:24px;padding:0 6px;background:var(--ink);color:#fff;font-family:var(--ui);font-weight:600;font-size:17px;line-height:24px;transform-origin:0 100%}
+
+/* text check */
+.ta{position:absolute;border:2px solid var(--rule);border-radius:8px;background:var(--paper);padding:18px 20px;font-family:var(--ui);font-size:25px;line-height:1.55;color:var(--ink)}
+.ta .wd{display:inline-block;overflow:hidden;vertical-align:top;margin-right:.28em}
+.ta .wd>span{display:inline-block}
+.diffout{position:absolute;border:2px solid var(--rule);border-radius:8px;background:var(--paper);padding:18px 22px;font-family:var(--ui);font-size:25px;line-height:1.9;color:var(--ink)}
+.diffout .m{color:var(--ink-2);background:#e6e9ec;text-decoration:line-through;text-decoration-thickness:3px;padding:0 6px;border-radius:4px}
+.diffout .x{color:#fff;background:var(--ink);padding:0 8px;border-radius:4px;font-weight:600}
+.status{position:absolute;font-family:var(--mono);font-size:20px;color:var(--ink-2);white-space:nowrap}
+
+/* full screen check booth */
+#fs .bg{position:absolute;left:-2000px;top:-2000px;width:5920px;height:5080px;background:var(--booth)}
+#fs .bar{position:absolute;left:0;top:0;width:1920px;height:74px;background:var(--booth-bar);border-bottom:1px solid var(--booth-line)}
+#fs .fb{position:absolute;top:14px;height:46px;padding:0 18px;display:flex;align-items:center;font-family:var(--ui);font-weight:600;font-size:21px;color:var(--booth-fg);border:1px solid var(--booth-line);border-radius:6px}
+#fs .fb.on{background:var(--booth-fg);color:var(--booth)}
+#fs .which{position:absolute;padding:8px 22px;font-family:var(--display);font-weight:700;font-size:52px;letter-spacing:.08em;line-height:1;border-radius:6px}
+
+/* end card */
+.end-name{font-family:var(--display);font-weight:700;font-size:150px;line-height:1;color:var(--ink);white-space:nowrap}
+.end-soon{font-family:var(--display);font-weight:500;font-size:70px;line-height:1;color:var(--ink-2);letter-spacing:.02em}
+.end-eyebrow{font-family:var(--display);font-weight:600;font-size:34px;letter-spacing:.24em;color:var(--ink-2);text-transform:uppercase}
+.accent{color:var(--accent)}
+
+/* through-line object + cursor (screen space) */
+#box{position:absolute;left:0;top:0;border-style:solid;border-color:var(--accent);transform-origin:0 0}
+#box .fill{position:absolute;inset:0;border-radius:inherit}
+#box .lab{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;font-family:var(--ui);font-weight:600;color:#fff;white-space:nowrap}
+#box .lab>span{display:inline-block}
+#box .tag{position:absolute;background:var(--accent);color:#fff;font-family:var(--ui);font-weight:600;text-align:center;transform-origin:0 100%}
+#box .white{position:absolute;inset:0;background:#fff;border-radius:inherit}
+#box .cm{position:absolute;border-radius:50%;transform-origin:50% 50%}
+#cursor{position:absolute;left:0;top:0;width:44px;height:58px;transform-origin:4px 4px}
+#chipfile{position:absolute;left:0;top:0;width:440px;height:104px;transform-origin:0 0;display:flex;align-items:center;gap:20px;padding:0 24px;background:#fff;border:2px solid var(--rule);border-radius:12px;box-shadow:0 18px 40px rgba(21,25,29,.14)}
+#chipfile .nm{font-family:var(--mono);font-size:24px;color:var(--ink)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="mbCam" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur id="mbCamB" stdDeviation="0 0"/></filter>
+  <filter id="mbBox" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur id="mbBoxB" stdDeviation="0 0"/></filter>
+</svg>
+<div id="stage">
+ <div id="cam">
+
+  <!-- HOOK -->
+  <div class="comp" id="hook">
+    <div class="abs" style="left:190px;top:150px">
+      <div class="mask hook-line" id="h1"><span class="in">One wrong</span></div>
+      <div class="mask hook-line" id="h2"><span class="in"><span class="w" id="hLetter">letter</span></span></div>
+      <div class="mask hook-line" id="h3"><span class="in">ships.</span></div>
+    </div>
+  </div>
+
+  <!-- M1: drop a print file -->
+  <div class="comp" id="m1">
+    <div class="card abs" id="rail" style="left:200px;top:150px;width:620px;height:790px">
+      <div class="drop" id="dropA" style="left:28px;top:28px;width:560px;height:320px">
+        <div class="label">1 · Party approved JPEG</div>
+        <div class="thumb"><div id="thumbA" class="abs" style="left:0;top:0;width:100%;height:100%"></div></div>
+        <div class="fname"><span class="imask"><span class="in" id="fnA0">Click or drop a file</span></span><span class="imask abs" style="left:0;top:0"><span class="in" id="fnA1">carton_approved.pdf</span></span></div>
+      </div>
+      <div class="drop" style="left:28px;top:370px;width:560px;height:320px">
+        <div class="label">2 · Our JPEG</div>
+        <div class="thumb"><div id="thumbB" class="abs" style="left:0;top:0;width:100%;height:100%"></div></div>
+        <div class="fname">carton_ours.jpg</div>
+      </div>
+      <div class="btn primary" style="left:28px;top:712px;width:560px;height:52px;font-size:24px">Compare images</div>
+    </div>
+    <div class="abs" style="left:960px;top:360px">
+      <div class="mask caption" id="c1a"><span class="in">Opens PDF,</span></div>
+      <div class="mask caption" id="c1b"><span class="in">TIFF and PSD.</span></div>
+    </div>
+  </div>
+
+  <!-- M2/M3: blink + every change boxed -->
+  <div class="comp" id="m2">
+    <div class="abs" id="tabs" style="left:700px;top:150px;width:1060px;height:56px">
+      <div class="btn" style="left:0;top:0;width:150px;height:56px;font-size:23px" id="tOurs">Our JPEG</div>
+      <div class="btn" style="left:162px;top:0;width:156px;height:56px;font-size:23px">Approved</div>
+      <div class="btn" style="left:330px;top:0;width:166px;height:56px;font-size:23px">Difference</div>
+      <div class="btn" style="left:508px;top:0;width:110px;height:56px;font-size:23px" id="tBlink">Blink</div>
+      <div class="btn primary" style="left:890px;top:0;width:170px;height:56px;font-size:23px">Full screen</div>
+    </div>
+    <div class="card abs" id="viewer" style="left:700px;top:228px;width:1060px;height:744px;overflow:hidden;border-radius:6px">
+      <div id="artM2"></div>
+    </div>
+    <div class="abs" style="left:150px;top:400px">
+      <div class="mask caption" id="c2a"><span class="in">Blink.</span></div>
+      <div class="mask caption" id="c2b"><span class="in">Spot the</span></div>
+      <div class="mask caption" id="c2c"><span class="in">change.</span></div>
+    </div>
+    <div class="mark" id="mk1"><span class="n">1</span></div>
+    <div class="mark" id="mk3"><span class="n">3</span></div>
+    <div class="card abs" id="detail" style="width:300px;height:118px;border-width:2px;border-radius:8px;display:flex;gap:14px;padding:12px">
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between"><div class="label" style="font-size:12px">Approved</div><div style="font-family:'Liberation Sans';font-size:48px;line-height:1;color:#1b2a1e">kg</div></div>
+      <div style="width:2px;background:var(--rule)"></div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between"><div class="label" style="font-size:12px">Ours</div><div style="font-family:'Liberation Sans';font-size:48px;line-height:1;color:#1b2a1e">kq</div></div>
+    </div>
+  </div>
+
+  <!-- M4: reads text, offline -->
+  <div class="comp" id="m4">
+    <div class="abs" style="left:160px;top:118px;width:1600px;height:150px;border-bottom:4px solid var(--ink)">
+      <div class="label abs" style="left:0;top:0">Prepress · approval check</div>
+      <div class="abs" style="left:0;top:36px;font-family:var(--display);font-weight:700;font-size:86px;line-height:1;color:var(--ink)">Approval Proof Checker</div>
+      <div class="abs" style="right:0;top:76px;display:flex;align-items:center;gap:12px">
+        <span class="chip" style="background:#00a3e0"></span><span class="chip" style="background:#e5007e"></span><span class="chip" style="background:#ffe500"></span><span class="chip" style="background:#1b1b1b"></span>
+        <span style="font-family:var(--mono);font-size:20px;color:var(--ink-2);margin:0 10px 0 4px">C M Y K</span>
+        <span id="pill" style="display:inline-block;height:44px;width:250px;border:2px solid var(--rule);border-radius:999px"></span>
+      </div>
+    </div>
+    <div class="card abs" style="left:160px;top:310px;width:1600px;height:700px">
+      <div class="abs" style="left:34px;top:30px;font-family:var(--display);font-weight:600;font-size:40px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink)">Text check against input</div>
+      <div class="label abs" style="left:34px;top:100px;font-size:18px">Text on party approved JPEG</div>
+      <div class="label abs" style="left:814px;top:100px;font-size:18px">Text on our JPEG</div>
+      <div class="ta" id="taA" style="left:34px;top:132px;width:752px;height:196px"></div>
+      <div class="ta" id="taB" style="left:814px;top:132px;width:752px;height:196px"></div>
+      <div class="btn primary" id="readBtn" style="left:34px;top:354px;width:420px;height:58px;font-size:24px">Read both JPEGs &amp; compare text</div>
+      <div class="btn" style="left:470px;top:354px;width:250px;height:58px;font-size:24px">Read our JPEG only</div>
+      <div class="status" style="left:744px;top:371px"><span class="imask"><span class="in" id="stat">Approved: 25 words (Mac reader) · Ours: 24 words (Mac reader)</span></span></div>
+      <div class="diffout" id="diffout" style="left:34px;top:440px;width:1532px;height:226px"></div>
+    </div>
+  </div>
+
+  <!-- PAYOFF: full screen check -->
+  <div class="comp" id="fs">
+    <div class="bg"></div>
+    <div class="bar">
+      <div class="fb on" style="left:24px">Blink</div>
+      <div class="fb" style="left:122px">Approved</div>
+      <div class="fb" style="left:262px">Ours</div>
+      <div class="fb" style="left:358px">Difference</div>
+      <div class="abs" style="left:540px;top:28px;font-family:var(--mono);font-size:19px;color:var(--booth-dim)">1 / 3 · Changed</div>
+      <div class="fb" style="right:24px">Close (Esc)</div>
+    </div>
+    <div id="fsArtWrap" class="abs" style="left:370px;top:200px;width:1180px;height:826px;overflow:hidden"><div id="artFS"></div></div>
+    <div class="which" id="which"><span class="imask"><span class="in" id="whichT">APPROVED</span></span></div>
+  </div>
+
+  <!-- END CARD -->
+  <div class="comp" id="end">
+    <div class="abs" style="left:0;width:1920px;top:178px;text-align:center"><span class="imask end-eyebrow"><span class="in" id="e0">Approval Proof Checker</span></span></div>
+    <div class="abs" id="iconSlot" style="left:820px;top:262px;width:280px;height:280px"></div>
+    <div class="abs" style="left:0;width:1920px;top:590px;text-align:center"><span class="imask end-name"><span class="in" id="e1">Proof Checker for <span class="accent">Mac</span></span></span></div>
+    <div class="abs" id="endRule" style="left:660px;top:772px;width:600px;height:4px;background:var(--ink);transform-origin:50% 50%"></div>
+    <div class="abs" style="left:0;width:1920px;top:806px;text-align:center"><span class="imask end-soon"><span class="in" id="e2">Coming soon</span></span></div>
+  </div>
+ </div>
+
+ <!-- through-line object -->
+ <div id="box">
+   <div class="fill" id="boxFill"></div>
+   <div class="white" id="boxWhite"></div>
+   <div class="cm" id="cmC" style="background:#00a3e0"></div>
+   <div class="cm" id="cmM" style="background:#e5007e"></div>
+   <div class="cm" id="cmY" style="background:#ffe500"></div>
+   <div class="cm" id="cmK" style="background:#1b1b1b"></div>
+   <div class="lab"><span id="labBlink">Blink</span></div>
+   <div class="lab"><span id="labPill">Mac app · offline</span></div>
+   <div class="tag" id="tag"><span class="imask"><span class="in" id="tagT">1</span></span></div>
+ </div>
+
+ <div id="chipfile">
+   <svg width="56" height="68" viewBox="0 0 56 68"><path d="M3 3h34l16 16v46H3z" fill="#fff" stroke="#15191d" stroke-width="4" stroke-linejoin="round"/><path d="M37 3v16h16" fill="none" stroke="#15191d" stroke-width="4" stroke-linejoin="round"/><text x="28" y="52" text-anchor="middle" font-family="Public Sans" font-weight="700" font-size="15" fill="#15191d">PDF</text></svg>
+   <span class="nm">carton_approved.pdf</span>
+ </div>
+
+ <svg id="cursor" viewBox="0 0 44 58"><path d="M4 4 L4 46 L14.5 36 L21.5 52 L28.5 49 L21.5 33.5 L36 33.5 Z" fill="#15191d" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg>
+</div>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const W = 1920, H = 1080, BPM = 120, B = 60 / BPM, bt = b => b * B;
+
+/* ---------- easing as functions of time ---------- */
+// damped spring, zeta .78 -> about 2% overshoot
+function spr(x, w = 24, z = 0.78){ if (x <= 0) return 0; const wd = w*Math.sqrt(1-z*z);
+  return 1 - Math.exp(-z*w*x)*(Math.cos(wd*x) + (z*w/wd)*Math.sin(wd*x)); }
+const sprCam = x => spr(x, 13, 0.86);
+const expo = (x, k = 14) => x <= 0 ? 0 : 1 - Math.exp(-k*x);
+const lerp = (a, b, p) => a + (b - a) * p;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerpR = (a, b, p) => ({x:lerp(a.x,b.x,p), y:lerp(a.y,b.y,p), w:lerp(a.w,b.w,p), h:lerp(a.h,b.h,p)});
+const hex = h => [1,3,5].map(i => parseInt(h.slice(i,i+2),16));
+const mix = (a, b, p) => { const A = hex(a), Bc = hex(b); return `rgb(${A.map((v,i)=>Math.round(lerp(v,Bc[i],clamp(p,0,1)))).join(',')})`; };
+// mask in at a, out at b (out moves up and away). Separate timings so letters never overlap.
+function maskY(el, t, a, b = 99, dir = 1){
+  const v = t < b ? (1 - spr(t - a)) * 112 * dir : -expo(t - b, 16) * 112 * dir;
+  el.style.transform = `translateY(${v}%)`;
+}
+function maskX(el, t, a, b = 99){ // reveal left-to-right (for single-line UI strings)
+  const p = t < b ? clamp(spr(t - a), 0, 1.02) : 1 - expo(t - b, 16);
+  el.style.clipPath = `inset(-20% ${(1 - clamp(p,0,1)) * 100}% -20% 0)`;
+}
+
+/* ---------- artwork ---------- */
+function burstPath(){ let d = ''; for (let i = 0; i < 24; i++){ const r = i%2 ? 40 : 70, a = i*Math.PI/12; d += (i?'L':'M') + (70 + r*Math.cos(a)).toFixed(1) + ' ' + (70 + r*Math.sin(a)).toFixed(1); } return d + 'Z'; }
+function barsSVG(){ const bars = [3,1,2,1,1,3,2,1,1,2,3,1,1,2,1,3,1,1,2,2,1,3,1,2,1,1,3,1,2,1]; let x = 0, s = '';
+  bars.forEach((w,i) => { if (i%2 === 0) s += `<rect x="${x}" y="0" width="${w*3}" height="110" fill="#000"/>`; x += w*3; });
+  return `<svg class="bars" width="${x}" height="110">${s}</svg>`; }
+function artHTML(id){
+  return `<div class="art" id="${id}">
+    <div class="band"></div><div class="organic">ORGANIC</div>
+    <div class="title">Basmati Rice</div>
+    <div class="net">Net Wt. 1 <span class="appr">kg</span><span class="ours abs" style="left:auto"><span id="${id}-kq">kq</span></span></div>
+    <div class="copy">Ingredients: 100% organic basmati rice.<br>Store in a cool and dry place.<br>Mfd. by Green Fields Foods, Delhi.</div>
+    <div class="seal appr"><b>100%</b><i>ORGANIC</i></div>
+    <svg class="burst ours" viewBox="0 0 140 140"><path d="${burstPath()}" fill="#d32f2f"/><text x="70" y="79" text-anchor="middle" font-family="Liberation Sans" font-weight="700" font-size="26" fill="#fff">NEW</text></svg>
+    ${barsSVG()}<div class="ean">8 901234 567890</div>
+    <span class="abs" id="${id}-seal" style="left:720px;top:200px;width:200px;height:200px"></span>
+    <span class="abs" id="${id}-burst" style="left:805px;top:515px;width:150px;height:150px"></span>
+  </div>`;
+}
+$('artM2').innerHTML = artHTML('a2');
+$('artFS').innerHTML = artHTML('af');
+$('thumbA').innerHTML = `<div style="position:absolute;left:50%;top:50%;width:1000px;height:700px;transform:translate(-50%,-50%) scale(.23)">${artHTML('ta')}</div>`;
+$('thumbB').innerHTML = `<div style="position:absolute;left:50%;top:50%;width:1000px;height:700px;transform:translate(-50%,-50%) scale(.23)">${artHTML('tb')}</div>`;
+// place "kq" right after "1 " (same baseline as kg)
+document.querySelectorAll('.net').forEach(n => { const o = n.querySelector('.ours'), a = n.querySelector('.appr'); o.style.left = a.offsetLeft + 'px'; o.style.top = '0px'; });
+// art scale inside viewers
+const kM2 = (1060 - 4) / 1000; $('a2').style.transform = `scale(${kM2})`; $('a2').style.left = '0px'; $('a2').style.top = ((744 - 4 - 700*kM2) / 2) + 'px';
+const kFS = 1180 / 1000; $('af').style.transform = `scale(${kFS})`;
+function showVariant(rootId, ours){
+  $(rootId).querySelectorAll('.appr').forEach(e => e.style.display = ours ? 'none' : '');
+  $(rootId).querySelectorAll('.ours').forEach(e => e.style.display = ours ? '' : 'none');
+}
+showVariant('ta', false); showVariant('tb', true);
+
+/* ---------- text check content ---------- */
+const TXT_A = 'ORGANIC Basmati Rice Net Wt. 1 kg Ingredients: 100% organic basmati rice. Store in a cool and dry place. Mfd. by Green Fields Foods, Delhi.';
+const TXT_B = 'ORGANIC Basmati Rice Net Wt. 1 kq Ingredients: 100% organic basmati rice. Store in a cool dry place. Mfd. by Green Fields Foods, Delhi.';
+const words = s => s.split(' ').map(w => `<span class="wd"><span>${w}</span></span>`).join('');
+$('taA').innerHTML = words(TXT_A); $('taB').innerHTML = words(TXT_B);
+$('diffout').innerHTML = `<div class="dl"><span class="imask"><span class="in">ORGANIC Basmati Rice Net Wt. 1 <span class="m">kg</span> Ingredients: 100% organic basmati rice. Store in a cool <span class="m">and</span> dry place.</span></span></div>
+  <div class="dl"><span class="imask"><span class="in">Mfd. by Green Fields Foods, Delhi.</span></span></div>
+  <div class="dl" style="margin-top:6px"><span class="imask"><span class="in"><span class="label" style="font-size:17px">On our artwork but not in input</span>&nbsp;&nbsp;<span class="x">kq</span></span></span></div>`;
+
+/* ---------- measure layout at runtime (camera at identity) ---------- */
+function rectOf(el, pad = 0){ const r = el.getBoundingClientRect(); return {x:r.left - pad, y:r.top - pad, w:r.width + 2*pad, h:r.height + 2*pad}; }
+const center = r => ({x: r.x + r.w/2, y: r.y + r.h/2});
+const M = {};
+function measure(){
+  $('cam').style.transform = 'none';
+  const L = rectOf($('hLetter'));
+  M.letter = {x:L.x - 24, y:L.y + L.h*0.07, w:L.w + 48, h:L.h*0.86};
+  M.drop = rectOf($('dropA'));
+  M.blink = rectOf($('tBlink'));
+  M.kq = rectOf($('a2-kq'), 7);
+  M.seal = rectOf($('a2-seal')); M.burst = rectOf($('a2-burst'));
+  M.pill = rectOf($('pill'));
+  M.read = rectOf($('readBtn'));
+  M.taA = rectOf($('taA')); M.diff = rectOf($('diffout'));
+  M.fskq = rectOf($('af-kq'), 9);
+  M.icon = rectOf($('iconSlot'));
+  M.tabs = rectOf($('tabs')); M.viewer = rectOf($('viewer')); M.rail = rectOf($('rail'));
+}
+
+/* ---------- camera: a chain of springs, plus a continuous push of 1.04x per bar ---------- */
+const creep = t => Math.pow(1.04, t / (4*B));
+let CK = [];
+function buildCam(){
+  const kq = center(M.kq), fk = center(M.fskq), pill = center(M.pill), rd = center(M.read), df = center(M.diff), bl = center(M.blink), rail = center(M.rail);
+  CK = [
+    [0,           960, 540, 1.00],
+    [bt(3.6),     rail.x + 40, 560, 1.10],          // into the drop zone
+    [bt(6.4),     980, 540, 1.00],                  // pull out for the caption
+    [bt(7.7),     bl.x - 120, bl.y + 160, 1.55],    // box lands on Blink
+    [bt(9.3),     1010, 560, 1.00],                 // watch it blink
+    [bt(12),      1180, 560, 1.18],
+    [bt(13.6),    kq.x + 40, kq.y + 30, 2.55],      // zoom to the changed letter
+    [bt(15),      kq.x + 70, kq.y + 60, 2.25],      // make room for the detail card
+    [bt(16),      pill.x - 260, pill.y + 140, 1.55],// badge
+    [bt(16.75),   rd.x + 160, rd.y - 60, 1.45],     // the click
+    [bt(17.6),    960, 470, 1.12],                  // text fills in
+    [bt(18.8),    df.x - 220, df.y - 10, 1.38],     // the diff
+    [bt(20),      960, 540, 1.00],                  // booth
+    [bt(22),      960, 560, 1.10],
+    [bt(24),      fk.x, fk.y, 2.9],                 // the catch
+    [bt(25),      960, 540, 1.00],                  // end card
+  ].map(k => [k[0], k[1], k[2], Math.log(k[3] / creep(k[0]))]);
+}
+function camAt(t){
+  let x = CK[0][1], y = CK[0][2], lz = CK[0][3];
+  for (let i = 1; i < CK.length; i++){ const p = sprCam(t - CK[i][0]); if (p === 0) break;
+    x += (CK[i][1] - CK[i-1][1]) * p; y += (CK[i][2] - CK[i-1][2]) * p; lz += (CK[i][3] - CK[i-1][3]) * p; }
+  return {x, y, z: Math.exp(lz) * creep(t)};
+}
+const toScreen = (c, r) => ({x: (r.x - c.x) * c.z + W/2, y: (r.y - c.y) * c.z + H/2, w: r.w * c.z, h: r.h * c.z});
+const toComp = (c, r) => ({x: (r.x - W/2) / c.z + c.x, y: (r.y - H/2) / c.z + c.y, w: r.w / c.z, h: r.h / c.z});
+const FULL = {x:-40, y:-40, w:W + 80, h:H + 80};
+
+/* ---------- the through-line object ---------- */
+// each state: when it starts, where it is (screen rect at time t), and how it looks
+const ST = [];
+function buildBox(){
+  const pt = r => ({x: r.x + r.w/2, y: r.y + r.h/2, w: 0, h: 0});
+  ST.push(
+    {t: -1,       r: c => toScreen(c, pt(M.letter)), bw: 7, rad: 4,  fill: null},
+    {t: bt(2.5),  r: c => toScreen(c, M.letter), bw: 7, rad: 4,  fill: null, tag: '1'},
+    {t: bt(4),    r: c => toScreen(c, M.drop),   bw: 5, rad: 10, fill: null},
+    {t: bt(8),    r: c => toScreen(c, M.blink),  bw: 3, rad: 8,  fill: '#0a6f8f', lab: 'labBlink', fs: 23},
+    {t: bt(12),   r: c => toScreen(c, M.kq),     bw: 4, rad: 3,  fill: null, tag: '2'},
+    {t: bt(16),   r: c => toScreen(c, M.pill),   bw: 3, rad: 999, fill: '#0a6f8f', lab: 'labPill', fs: 20},
+    {t: bt(20),   r: c => FULL,                  bw: 0, rad: 0,  fill: null, under: true},
+    {t: bt(24),   r: c => toScreen(c, M.fskq),   bw: 4, rad: 3,  fill: null, tag: '2'},
+    {t: bt(25),   r: c => toScreen(c, M.icon),   bw: 3.2, rad: 62, fill: null, icon: true},
+  );
+}
+function boxAt(t, c){
+  let i = 0; for (let k = 1; k < ST.length; k++) if (t >= ST[k].t) i = k;
+  const cur = ST[i], prev = ST[Math.max(0, i-1)], p = i === 0 ? 0 : spr(t - cur.t, 20, 0.8);
+  const r = i === 0 ? cur.r(c) : lerpR(prev.r(c), cur.r(c), p);
+  // border scales with the camera so it reads as part of the layout
+  const bw = lerp(prev.bw, cur.bw, clamp(p,0,1)) * (cur.icon ? c.z : Math.min(c.z, 2.2) * 1.0);
+  const rad = Math.min(lerp(Math.min(prev.rad, 400), Math.min(cur.rad, 400), clamp(p,0,1)) * (cur.icon ? c.z : Math.min(c.z,1.6)), r.h/2, r.w/2);
+  return {i, cur, prev, p, r, bw, rad};
+}
+
+/* ---------- cursor path (comp coordinates) ---------- */
+let CUR = [];
+function buildCursor(){
+  const d = center(M.drop), bl = center(M.blink), kq = M.kq, rd = center(M.read), df = M.diff;
+  CUR = [
+    [bt(4.4),  2160, 930],
+    [bt(4.55), 1480, 780],
+    [bt(5.15), d.x + 20, d.y + 10],
+    [bt(6.6),  1180, 520],
+    [bt(8.1),  bl.x + 14, bl.y + 10],
+    [bt(9.7),  bl.x + 160, bl.y + 220],
+    [bt(13.2), kq.x + kq.w*0.6, kq.y + kq.h*0.8],
+    [bt(15.3), rd.x + 40, rd.y + 300],
+    [bt(16.1), rd.x + 30, rd.y + 12],
+    [bt(17.8), df.x + 700, df.y + 120],
+    [bt(19.4), df.x + 2400, df.y + 900],
+  ];
+}
+const PRESS = [bt(6), bt(9), bt(14), bt(17)];
+function curAt(t){
+  let x = CUR[0][1], y = CUR[0][2];
+  for (let i = 1; i < CUR.length; i++){ const p = spr(t - CUR[i][0], 11, 0.9); if (p === 0) break;
+    x += (CUR[i][1] - CUR[i-1][1]) * p; y += (CUR[i][2] - CUR[i-1][2]) * p; }
+  return {x, y};
+}
+const press = t => PRESS.reduce((s, tp) => s + Math.exp(-Math.pow((t - tp + 0.03) / 0.05, 2)), 0);
+
+/* ---------- visibility + unfold helpers ---------- */
+const vis = (el, on) => { el.style.visibility = on ? 'inherit' : 'hidden'; };
+function clipRect(el, r, rad = 0){ // r in comp coords
+  el.style.clipPath = `inset(${r.y}px ${W - r.x - r.w}px ${H - r.y - r.h}px ${r.x}px round ${rad}px)`;
+}
+const COMPFULL = {x:-3000, y:-3000, w:W + 6000, h:H + 6000};
+function unfold(el, t, t0, from, t1 = 99, to = null){
+  if (t < t0) { vis(el, false); return; }
+  if (t1 < 99 && t >= t1 + 0.6) { vis(el, false); return; }
+  vis(el, true);
+  let r = lerpR(from, COMPFULL, Math.pow(clamp(spr(t - t0, 14, 0.9), 0, 1), 2.2));
+  if (t >= t1) r = lerpR(COMPFULL, to, 1 - Math.pow(1 - clamp(expo(t - t1, 9), 0, 1), 2.6));
+  clipRect(el, r);
+}
+
+/* =================== seek(t) =================== */
+function seek(t){
+  const c = camAt(t), c0 = camAt(t - 1/60);
+  $('cam').style.transform = `translate(${W/2}px,${H/2}px) scale(${c.z}) translate(${-c.x}px,${-c.y}px)`;
+  // directional blur from camera speed (screen px per frame)
+  const vx = Math.abs((c.x - c0.x) * c.z), vy = Math.abs((c.y - c0.y) * c.z);
+  const sx = vx > 12 ? Math.min(7, (vx - 12) * 0.1) : 0, sy = vy > 12 ? Math.min(7, (vy - 12) * 0.1) : 0;
+  $('mbCamB').setAttribute('stdDeviation', `${(sx/c.z).toFixed(2)} ${(sy/c.z).toFixed(2)}`);
+  $('cam').style.filter = (sx || sy) ? 'url(#mbCam)' : 'none';
+
+  /* ----- hook ----- */
+  vis($('hook'), t < bt(4.2));
+  maskY($('h1').firstElementChild, t, 0.02, bt(3));
+  maskY($('h2').firstElementChild, t, bt(1), bt(3.5));
+  maskY($('h3').firstElementChild, t, bt(2), bt(2.75), -1);
+
+  /* ----- M1 ----- */
+  unfold($('m1'), t, bt(4), M.drop, bt(8), M.blink);
+  // thumbnail of the dropped file unmasks top-down
+  const th = clamp(spr(t - bt(6.05), 18, 0.9), 0, 1);
+  $('thumbA').style.clipPath = `inset(0 0 ${(1 - th) * 100}% 0)`;
+  maskY($('fnA0'), t, -1, bt(6.05));
+  maskY($('fnA1'), t, bt(6.15));
+  maskY($('c1a').firstElementChild, t, bt(6.5), bt(8));
+  maskY($('c1b').firstElementChild, t, bt(7), bt(8.08));
+
+  /* ----- M2/M3 ----- */
+  unfold($('m2'), t, bt(8), M.blink, bt(16), M.pill);
+  const blinkOn = t >= bt(9);
+  const showOurs = !blinkOn || t >= bt(12) ? true : (Math.floor((t - bt(9)) / B) % 2 === 1);
+  showVariant('a2', showOurs);
+  $('tOurs').style.background = blinkOn ? '#fff' : 'var(--ink)'; $('tOurs').style.color = blinkOn ? 'var(--ink)' : '#fff'; $('tOurs').style.borderColor = blinkOn ? 'var(--rule)' : 'var(--ink)';
+  maskY($('c2a').firstElementChild, t, bt(10), bt(12));
+  maskY($('c2b').firstElementChild, t, bt(11), bt(12.06));
+  maskY($('c2c').firstElementChild, t, bt(11.12), bt(12.12));
+  // the other two differences grow out of their centres
+  [['mk1', M.seal, bt(13)], ['mk3', M.burst, bt(13.25)]].forEach(([id, r, t0]) => {
+    const p = clamp(spr(t - t0, 22, 0.8), 0, 1.03), el = $(id), cx = r.x + r.w/2, cy = r.y + r.h/2;
+    vis(el, t >= t0);
+    el.style.left = (cx - r.w*p/2) + 'px'; el.style.top = (cy - r.h*p/2) + 'px'; el.style.width = r.w*p + 'px'; el.style.height = r.h*p + 'px';
+    el.firstElementChild.style.transform = `scale(${clamp(spr(t - t0 - 0.12), 0, 1.03)})`;
+  });
+  // detail card unfolds from the box downward
+  { const el = $('detail'), k = M.kq, p = clamp(spr(t - bt(15), 18, 0.85), 0, 1.02);
+    vis(el, t >= bt(15)); el.style.left = (k.x - 30) + 'px'; el.style.top = (k.y + k.h + 14) + 'px';
+    el.style.clipPath = `inset(0 0 ${(1 - clamp(p,0,1)) * 100}% 0 round 8px)`; }
+
+  /* ----- M4 ----- */
+  unfold($('m4'), t, bt(16), M.pill, bt(21), M.pill);
+  document.querySelectorAll('#taA .wd>span, #taB .wd>span').forEach((s, i, all) => {
+    const half = all.length / 2, j = i < half ? i : i - half;
+    s.style.transform = `translateY(${(1 - clamp(spr(t - bt(17.7) - j * 0.022, 26, 0.85), 0, 1.03)) * 110}%)`;
+  });
+  maskX($('stat'), t, bt(18.3));
+  document.querySelectorAll('#diffout .dl .in').forEach((s, i) => maskY(s, t, bt(19) + i * 0.08));
+  $('readBtn').style.transform = `scale(${1 - 0.05 * Math.exp(-Math.pow((t - bt(17)) / 0.06, 2))})`;
+
+  /* ----- PAYOFF booth ----- */
+  // shown through the box as it grows from the badge to past every corner, and folds back into the box at b25
+  const bx = boxAt(t, c);
+  const fsEl = $('fs');
+  if (t < bt(20) || t > bt(26.2)) vis(fsEl, false);
+  else {
+    vis(fsEl, true);
+    let sr; // screen-space clip
+    if (t < bt(24)) sr = bx.r;
+    else if (t < bt(25)) sr = FULL;
+    else sr = lerpR(FULL, bx.r, clamp(spr(t - bt(25), 34, 0.9), 0, 1));
+    const cr = toComp(c, sr), rad = t < bt(24) ? Math.min(bx.rad, sr.h/2) / c.z : (t >= bt(25) ? bx.rad / c.z : 0);
+    clipRect(fsEl, cr, rad);
+  }
+  // blink in the booth: accelerates into the big beat
+  const flips = [bt(20.5), bt(21.5), bt(22), bt(22.5), bt(23), bt(23.25), bt(23.5), bt(23.75)];
+  const nFl = flips.filter(f => t >= f).length, fsOurs = t >= bt(24) ? true : nFl % 2 === 0;
+  showVariant('af', fsOurs);
+  { const wh = $('which'); const wr = M.fsArt || ($('fsArtWrap').getBoundingClientRect());
+    wh.style.left = '370px'; wh.style.top = '106px';
+    wh.style.background = fsOurs ? '#2c3238' : '#e9edf0'; wh.style.color = fsOurs ? '#e9edf0' : '#0d0f11';
+    $('whichT').textContent = fsOurs ? 'OURS' : 'APPROVED';
+    maskY($('whichT'), t, bt(20.5), bt(24)); }
+
+  /* ----- END CARD ----- */
+  vis($('end'), t >= bt(24.8));
+  maskY($('e1'), t, bt(26));
+  maskY($('e2'), t, bt(27));
+  maskY($('e0'), t, bt(28), 99, -1);
+  $('endRule').style.transform = `scaleX(${clamp(spr(t - bt(29), 16, 0.9), 0, 1.01)})`;
+  vis($('endRule'), t >= bt(29));
+  // end hold: one last move on the final half beat
+  /* ----- the box ----- */
+  drawBox(t, c, bx);
+
+  /* ----- file chip + cursor ----- */
+  const cp = curAt(t), cs = toScreen(c, {x: cp.x, y: cp.y, w: 0, h: 0});
+  const curOn = t >= bt(4.4) && t < bt(20);
+  vis($('cursor'), curOn);
+  $('cursor').style.transform = `translate(${cs.x - 4}px,${cs.y - 4}px) scale(${1 - 0.16 * press(t)})`;
+  const chip = $('chipfile');
+  if (t >= bt(4.4) && t < bt(6.6)){
+    vis(chip, true);
+    if (t < bt(6)) { chip.style.transform = `translate(${cs.x - 60}px,${cs.y - 40}px) rotate(${-3 + 3 * clamp(spr(t - bt(5.2)),0,1)}deg)`; chip.style.clipPath = 'none'; }
+    else { // released: chip folds into the thumbnail
+      const p = clamp(spr(t - bt(6), 18, 0.9), 0, 1), d = toScreen(c, M.drop);
+      const tx = lerp(cs.x - 60, d.x + d.w/2 - 220 * 0.3, p), ty = lerp(cs.y - 40, d.y + d.h*0.45, p);
+      chip.style.transform = `translate(${tx}px,${ty}px) scale(${lerp(1, 0.3, p)})`;
+      chip.style.clipPath = `inset(0 0 ${p * 100}% 0 round 12px)`;
+    }
+  } else vis(chip, false);
+}
+
+function drawBox(t, c, bx){
+  const el = $('box'), r = bx.r, cur = bx.cur, prev = bx.prev, p = clamp(bx.p, 0, 1);
+  // before b2.5 the box does not exist; after the booth it is under the booth layer
+  // b20-b24 the box *is* the booth: the booth layer is clipped to the box's rect, so the box outline itself steps aside
+  vis(el, t >= bt(2.5) && !(t >= bt(20) && t < bt(24)));
+  el.style.left = r.x + 'px'; el.style.top = r.y + 'px'; el.style.width = r.w + 'px'; el.style.height = r.h + 'px';
+  el.style.borderWidth = bx.bw + 'px'; el.style.borderRadius = bx.rad + 'px';
+  // motion blur on fast moves
+  const c0 = camAt(t - 1/60), b0 = boxAt(t - 1/60, c0).r;
+  const vx = Math.abs((r.x + r.w/2) - (b0.x + b0.w/2)), vy = Math.abs((r.y + r.h/2) - (b0.y + b0.h/2));
+  const sx = vx > 8 ? Math.min(10, (vx - 8) * 0.18) : 0, sy = vy > 8 ? Math.min(10, (vy - 8) * 0.18) : 0;
+  $('mbBoxB').setAttribute('stdDeviation', `${sx.toFixed(2)} ${sy.toFixed(2)}`);
+  el.style.filter = (sx || sy) ? 'url(#mbBox)' : 'none';
+  // fill colour (solid states only)
+  const fa = prev.fill ? 1 : 0, fb = cur.fill ? 1 : 0, f = lerp(fa, fb, p);
+  $('boxFill').style.background = `rgba(10,111,143,${f.toFixed(3)})`;
+  // labels inside the box
+  [['labBlink'], ['labPill']].forEach(([id]) => {
+    const s = $(id), st = ST.find(x => x.lab === id), nx = ST[ST.indexOf(st) + 1];
+    s.style.fontSize = (st.fs * Math.min(c.z, 3)) + 'px';
+    maskY(s, t, st.t + 0.12, nx.t);
+    vis(s, t >= st.t && t < nx.t + 0.12);
+  });
+  // number tag grows from the corner
+  const tagOn = cur.tag && t >= cur.t, tg = $('tag');
+  const tz = Math.min(c.z, 2.4);
+  if (tagOn || (prev.tag && t < cur.t + 0.3)) {
+    const sc = tagOn ? clamp(spr(t - cur.t - 0.12), 0, 1.03) : 1 - clamp(expo(t - cur.t, 18), 0, 1);
+    vis(tg, true);
+    tg.style.height = 30 * tz + 'px'; tg.style.minWidth = 30 * tz + 'px'; tg.style.fontSize = 20 * tz + 'px'; tg.style.lineHeight = 30 * tz + 'px';
+    tg.style.left = -bx.bw + 'px'; tg.style.top = (-bx.bw - 30 * tz) + 'px'; tg.style.padding = `0 ${8*tz}px`;
+    tg.style.transform = `scale(${sc})`;
+    $('tagT').textContent = tagOn ? cur.tag : prev.tag;
+  } else vis(tg, false);
+  // icon: a white face is revealed by a mask rising from the bottom, then the CMYK mark grows in
+  const iconOn = cur.icon && t >= cur.t;
+  const wp = iconOn ? clamp(spr(t - cur.t - 0.05, 16, 0.9), 0, 1) : 0;
+  $('boxWhite').style.clipPath = `inset(${(1 - wp) * 100}% 0 0 0)`;
+  vis($('boxWhite'), iconOn);
+  const cm = [['cmC', -1, -1, 0], ['cmM', 1, -1, 0.06], ['cmY', -1, 1, 0.12], ['cmK', 1, 1, 0.18]];
+  const sz = r.w * 0.24, gap = r.w * 0.15;
+  cm.forEach(([id, dx, dy, dl]) => {
+    const e = $(id), s = iconOn ? clamp(spr(t - bt(26) - dl, 20, 0.8), 0, 1.03) : 0;
+    vis(e, s > 0);
+    e.style.width = e.style.height = sz + 'px';
+    e.style.left = (r.w/2 - bx.bw + dx * gap - sz/2) + 'px'; e.style.top = (r.h/2 - bx.bw + dy * gap - sz/2) + 'px';
+    e.style.transform = `scale(${s})`;
+  });
+}
+
+window.seek = seek;
+window.BEAT = B;
+document.fonts.ready.then(() => Promise.all([
+  document.fonts.load('700 100px "Barlow Condensed"'), document.fonts.load('600 100px "Barlow Condensed"'), document.fonts.load('500 100px "Barlow Condensed"'),
+  document.fonts.load('600 20px "Public Sans"'), document.fonts.load('400 20px "Public Sans"'), document.fonts.load('20px "JetBrains Mono"'),
+  document.fonts.load('700 20px "Liberation Sans"'), document.fonts.load('700 20px "Liberation Serif"')
+])).then(() => {
+  // measure with everything laid out and visible-but-unclipped
+  showVariant('a2', true); showVariant('af', true);
+  measure(); buildCam(); buildBox(); buildCursor();
+  seek(0); window.ready = true;
+});
+})();
+</script>
+</body>
+</html>
