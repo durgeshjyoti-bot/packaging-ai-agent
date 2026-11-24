@@ -56,12 +56,21 @@ sheet to check black overprint, trapping and continuity.
 
 ## Performance on real (large) files
 
-Toggling/reordering colors works off a capped-resolution copy of each plate
-(long edge ≤ 1600px) so it stays responsive regardless of how large the
-original TIFFs are — a real job's plates can be tens of megapixels each.
-The ruler still measures in the original file's pixels/inches/mm, and
-**Export Snapshot** rebuilds the composite at full native resolution just
-for that one export, so the downloaded PNG isn't downsampled.
+The composite view runs at **full native resolution by default** — fine
+prepress detail (hairlines, small type, barcodes, trapping) must stay
+checkable, so quality is never silently reduced. Toggling colors should
+already be noticeably faster than an earlier version of this tool, which
+had a real bug: it was resizing the canvas on every single click even when
+the size hadn't changed, forcing a full reallocation each time.
+
+If a specific job is genuinely heavy (tens of megapixels per plate) and
+toggling still feels slow, turn on **Fast Preview** in the bottom bar — it
+switches the interactive view to a capped-resolution copy (long edge
+≤1600px) purely for speed. This is an explicit, visible choice you make per
+job, not something the app decides for you. Either way, the **ruler**
+measures in the original file's real pixels/inches/mm, and **Export
+Snapshot** always rebuilds the composite at full resolution for the actual
+saved file, regardless of the Fast Preview setting.
 
 ## Known limitations (MVP)
 

@@ -19,11 +19,13 @@ const state = {
   mirrored: false,
   rulerMode: false,
   operatorName: "",
-  checklist: []
+  checklist: [],
+  fastPreview: false // opt-in only: full resolution is the default so fine detail (barcodes, small text, trapping) is never silently blurred
 };
 
 const FALLBACK_PALETTE = ["#808080", "#ff8c00", "#8a2be2", "#8b4513", "#20b2aa", "#dc143c", "#2e8b57", "#4169e1"];
-const MAX_WORK_DIM = 1600; // interactive composite is capped to this on the long edge for speed; export rebuilds at full res
+const FAST_PREVIEW_DIM = 1600; // long-edge cap used only when Fast Preview is explicitly turned on
+const HARD_SAFETY_DIM = 8000;  // absolute ceiling regardless of mode, to avoid exhausting browser canvas memory on an extreme file
 
 const DEFAULT_CHECKLIST = [
   "Logo is the correct, current version and color",
@@ -295,7 +297,7 @@ function buildLayerCanvas(plate) {
   if (plate.isComposite) {
     ctx.putImageData(new ImageData(new Uint8ClampedArray(plate.rgba.buffer.slice(0)), w, h), 0, 0);
     plate.layerCanvas = cnv;
-    plate.workLayerCanvas = makeWorkCanvas(cnv, w, h);
+    refreshWorkCanvas(plate);
     return;
   }
 
@@ -313,22 +315,37 @@ function buildLayerCanvas(plate) {
   }
   ctx.putImageData(new ImageData(out, w, h), 0, 0);
   plate.layerCanvas = cnv;
-  plate.workLayerCanvas = makeWorkCanvas(cnv, w, h);
+  refreshWorkCanvas(plate);
 }
 
-/* Interactive toggling/zooming works off a capped-resolution copy of each
-   plate so a heavy real-world job (tens of megapixels per plate) doesn't
-   have to be redrawn at full size on every click. Export rebuilds at full
-   resolution separately, once, on demand. */
-function makeWorkCanvas(fullCanvas, w, h) {
+/* The interactive view is built from workLayerCanvas. By default that's the
+   SAME canvas as the full-resolution layerCanvas (no quality loss, since
+   fine prepress detail — hairlines, small type, barcodes — must stay
+   checkable), capped only by a generous hard safety ceiling to avoid
+   exhausting browser memory on a truly extreme file. Fast Preview is an
+   explicit opt-in for when a specific job is too heavy to toggle smoothly
+   at full resolution; export/ruler always use the real, full-res data. */
+function refreshWorkCanvas(plate) {
+  const targetDim = state.fastPreview ? FAST_PREVIEW_DIM : HARD_SAFETY_DIM;
+  plate.workLayerCanvas = downscaleCanvas(plate.layerCanvas, targetDim);
+}
+
+function downscaleCanvas(fullCanvas, targetDim) {
+  const w = fullCanvas.width, h = fullCanvas.height;
   const maxDim = Math.max(w, h);
-  if (maxDim <= MAX_WORK_DIM) return fullCanvas;
-  const s = MAX_WORK_DIM / maxDim;
+  if (maxDim <= targetDim) return fullCanvas;
+  const s = targetDim / maxDim;
   const wc = document.createElement("canvas");
   wc.width = Math.max(1, Math.round(w * s));
   wc.height = Math.max(1, Math.round(h * s));
   wc.getContext("2d").drawImage(fullCanvas, 0, 0, wc.width, wc.height);
   return wc;
+}
+
+function setFastPreview(on) {
+  state.fastPreview = on;
+  state.plates.forEach(refreshWorkCanvas);
+  recomposite();
 }
 
 /* ============================================================
@@ -634,6 +651,10 @@ function enterViewer() {
   $("canvasStage").classList.remove("ruler-active");
   $("rulerSvg").classList.remove("active");
   $("rulerSvg").innerHTML = "";
+  state.fastPreview = false;
+  $("btnFastPreview").textContent = "Fast Preview: Off";
+  $("btnFastPreview").classList.remove("active");
+  state.plates.forEach(refreshWorkCanvas);
   loadChecklistState();
   renderChecklist();
   recomposite();
@@ -769,6 +790,12 @@ function applyTransform() {
   canvas.style.transformOrigin = "0 0";
   $("zoomLabel").textContent = Math.round(state.scale * 100) + "%";
 }
+
+$("btnFastPreview").addEventListener("click", () => {
+  setFastPreview(!state.fastPreview);
+  $("btnFastPreview").textContent = state.fastPreview ? "Fast Preview: On" : "Fast Preview: Off";
+  $("btnFastPreview").classList.toggle("active", state.fastPreview);
+});
 
 $("btnMirror").addEventListener("click", () => {
   state.mirrored = !state.mirrored;
