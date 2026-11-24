@@ -24,7 +24,7 @@
     "directories": { "output": "dist" },
     "files": ["main.js", "preload.js", "renderer/**/*"],
     "mac": {
-      "target": "dmg",
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
       "category": "public.app-category.graphics-design"
     },
     "win": {
