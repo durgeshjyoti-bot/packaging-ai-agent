@@ -30,10 +30,38 @@ sheet to check black overprint, trapping and continuity.
 6. **Save Colors** writes a small `<job>_plate-colors.json` file you can keep
    in the job folder — **Load Saved Colors** on the assign screen restores the
    same colors/order next time without re-assigning everything.
-7. **Export Snapshot** saves the current composite as a PNG for the QC record.
+7. **Export Snapshot** saves the current composite as a full-resolution PNG
+   for the QC record (mirrored too, if "View: Reverse" is on).
 8. **Compare with JPEG** opens the prepress proof JPEG next to the composite:
    click the image or press **Space** to blink between them, or drag the
    slider to cross-fade/wipe between the two.
+9. **View: Surface / Reverse** flips the whole composite left-right. ArtPro
+   mirrors files for engraving, so use **Reverse** to view it as delivered,
+   or **Surface** to view it the normal reading way (e.g. to compare against
+   a printed sheet/photo proof, which always reads normally). This affects
+   the live view, the compare-with-JPEG overlay, and Export Snapshot.
+10. **Ruler** — click it on, then click-drag on the canvas to measure any
+    distance. Shows pixels, inches and mm (using the job's dpi), and stays
+    accurate even when a big file is being shown at reduced screen quality
+    (see Performance below).
+11. **Prepress checklist** (right panel) — tick off standard checks as you go
+    (logo, barcode, legal text, trapping, mirror orientation, etc.), add your
+    own items, and attach a note to any item. Fill in **Checked by** with your
+    name. The checklist and name are remembered per job folder (in this
+    browser) so reopening the same job later restores where you left off.
+12. **Save QC Report** exports a single, self-contained HTML file — checklist
+    results, operator name/date, the plate list and a snapshot image — named
+    `<job>_<operator>_<date>_QC-Report.html`. Keep it with the job as your
+    sign-off record.
+
+## Performance on real (large) files
+
+Toggling/reordering colors works off a capped-resolution copy of each plate
+(long edge ≤ 1600px) so it stays responsive regardless of how large the
+original TIFFs are — a real job's plates can be tens of megapixels each.
+The ruler still measures in the original file's pixels/inches/mm, and
+**Export Snapshot** rebuilds the composite at full native resolution just
+for that one export, so the downloaded PNG isn't downsampled.
 
 ## Known limitations (MVP)
 
@@ -42,11 +70,19 @@ sheet to check black overprint, trapping and continuity.
   and flagged "multi-channel" — it's not treated as an ink plate.
 - Colors are for on-screen visual checking only (fast CMYK→RGB math), not
   color-managed proofing.
-- Very large plates (tens of megapixels) may take a few seconds to decode —
-  this runs in plain JavaScript with no server, so there's no progress beyond
-  the on-screen "decoding plate N of M" status.
+- Very large plates (tens of megapixels) may take a few seconds to decode on
+  first load — this runs in plain JavaScript with no server, so there's no
+  progress beyond the on-screen "decoding plate N of M" status.
 - The JPEG proof is scaled to the composite's pixel size for comparison; it
   won't correct for a proof that's cropped differently from the plates.
+- Checklist/operator name are saved in the browser's local storage, keyed by
+  job folder name — they don't follow the job if opened on a different
+  computer or in a different browser. The exported QC report is the portable
+  record.
+- No real folder/log auto-creation: the browser can't write to arbitrary
+  folders on disk. Each report/snapshot is a normal download with a
+  job+operator+date filename, meant to be filed into the job folder by hand
+  (or a shared "QC Reports" folder).
 
 ## Files
 

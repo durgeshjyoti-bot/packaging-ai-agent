@@ -15,10 +15,33 @@ const state = {
   panX: 0,
   panY: 0,
   compare: { mode: "slider", blinkShowJpeg: false, jpegImg: null },
-  fallbackIdx: 0
+  fallbackIdx: 0,
+  mirrored: false,
+  rulerMode: false,
+  operatorName: "",
+  checklist: []
 };
 
 const FALLBACK_PALETTE = ["#808080", "#ff8c00", "#8a2be2", "#8b4513", "#20b2aa", "#dc143c", "#2e8b57", "#4169e1"];
+const MAX_WORK_DIM = 1600; // interactive composite is capped to this on the long edge for speed; export rebuilds at full res
+
+const DEFAULT_CHECKLIST = [
+  "Logo is the correct, current version and color",
+  "Barcode scans correctly and has proper quiet zone",
+  "Mandatory/legal text present and correct (ingredients, nutrition, warnings)",
+  "Black text/elements set to overprint 100K (not registration black)",
+  "Spot colors correctly named and matched to Pantone/customer standard",
+  "Image resolution adequate at final size (no pixelation)",
+  "Bleed and trim marks correct, artwork matches dieline",
+  "Varnish/foil plate registered correctly to print",
+  "Date code / batch code placeholder present and positioned correctly",
+  "Required regulatory/recycling marks present",
+  "Reverse/mirror orientation correct for this engraving process",
+  "Trapping checked on every color pair (no white gaps/halos)",
+  "No stray spot colors or unused channels in the file",
+  "Total ink coverage within press limit",
+  "Final file matches customer-approved proof"
+];
 
 /* ============================================================
    Small helpers
@@ -272,6 +295,7 @@ function buildLayerCanvas(plate) {
   if (plate.isComposite) {
     ctx.putImageData(new ImageData(new Uint8ClampedArray(plate.rgba.buffer.slice(0)), w, h), 0, 0);
     plate.layerCanvas = cnv;
+    plate.workLayerCanvas = makeWorkCanvas(cnv, w, h);
     return;
   }
 
@@ -289,6 +313,22 @@ function buildLayerCanvas(plate) {
   }
   ctx.putImageData(new ImageData(out, w, h), 0, 0);
   plate.layerCanvas = cnv;
+  plate.workLayerCanvas = makeWorkCanvas(cnv, w, h);
+}
+
+/* Interactive toggling/zooming works off a capped-resolution copy of each
+   plate so a heavy real-world job (tens of megapixels per plate) doesn't
+   have to be redrawn at full size on every click. Export rebuilds at full
+   resolution separately, once, on demand. */
+function makeWorkCanvas(fullCanvas, w, h) {
+  const maxDim = Math.max(w, h);
+  if (maxDim <= MAX_WORK_DIM) return fullCanvas;
+  const s = MAX_WORK_DIM / maxDim;
+  const wc = document.createElement("canvas");
+  wc.width = Math.max(1, Math.round(w * s));
+  wc.height = Math.max(1, Math.round(h * s));
+  wc.getContext("2d").drawImage(fullCanvas, 0, 0, wc.width, wc.height);
+  return wc;
 }
 
 /* ============================================================
@@ -352,7 +392,7 @@ function drawThumb(canvasEl, plate) {
   const ctx = canvasEl.getContext("2d");
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
-  ctx.drawImage(plate.layerCanvas, 0, 0, canvasEl.width, canvasEl.height);
+  ctx.drawImage(plate.workLayerCanvas, 0, 0, canvasEl.width, canvasEl.height);
 }
 
 $("assignBack").addEventListener("click", () => showScreen("screen-load"));
@@ -586,6 +626,16 @@ function enterViewer() {
   renderLayerList();
   renderTogglePills();
   state.scale = null; // force a fit on first paint
+  state.mirrored = false;
+  $("btnMirror").textContent = "View: Surface (normal)";
+  $("btnMirror").classList.remove("active");
+  state.rulerMode = false;
+  $("btnRuler").classList.remove("active");
+  $("canvasStage").classList.remove("ruler-active");
+  $("rulerSvg").classList.remove("active");
+  $("rulerSvg").innerHTML = "";
+  loadChecklistState();
+  renderChecklist();
   recomposite();
 }
 $("btnBackToAssign").addEventListener("click", () => showScreen("screen-assign"));
@@ -657,24 +707,51 @@ function renderTogglePills() {
 $("allOn").addEventListener("click", () => { state.plates.forEach(p => p.visible = true); renderLayerList(); renderTogglePills(); recomposite(); });
 $("allOff").addEventListener("click", () => { state.plates.forEach(p => p.visible = false); renderLayerList(); renderTogglePills(); recomposite(); });
 
-/* ---- compositing ---- */
-function recomposite() {
-  if (!state.plates.length) return;
-  const w = Math.max(...state.plates.map(p => p.width));
-  const h = Math.max(...state.plates.map(p => p.height));
-  const canvas = $("mainCanvas");
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d");
+/* ---- compositing ----
+   Interactive view is drawn from each plate's capped workLayerCanvas so
+   toggling/reordering stays fast regardless of the original file size. */
+function compositeOnto(ctx, w, h, layerKey) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, w, h);
   state.order.forEach(id => {
     const plate = plateById(id);
     if (!plate.visible) return;
     ctx.globalCompositeOperation = plate.isComposite ? "source-over" : "multiply";
-    ctx.drawImage(plate.layerCanvas, 0, 0);
+    ctx.drawImage(plate[layerKey], 0, 0);
   });
   ctx.globalCompositeOperation = "source-over";
+}
+
+function recomposite() {
+  if (!state.plates.length) return;
+  const w = Math.max(...state.plates.map(p => p.workLayerCanvas.width));
+  const h = Math.max(...state.plates.map(p => p.workLayerCanvas.height));
+  const canvas = $("mainCanvas");
+  // resizing a canvas forces a full reallocation+clear even when the value
+  // doesn't change, so only touch width/height when the size actually changes
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  compositeOnto(canvas.getContext("2d"), w, h, "workLayerCanvas");
   applyTransform();
+}
+
+/* Rebuilds the composite at each plate's native resolution — used only for
+   the one-off Export Snapshot, not for every interactive toggle. */
+function buildFullResComposite() {
+  const w = Math.max(...state.plates.map(p => p.layerCanvas.width));
+  const h = Math.max(...state.plates.map(p => p.layerCanvas.height));
+  const cnv = document.createElement("canvas");
+  cnv.width = w; cnv.height = h;
+  compositeOnto(cnv.getContext("2d"), w, h, "layerCanvas");
+  return state.mirrored ? mirrorCanvas(cnv) : cnv;
+}
+
+function mirrorCanvas(src) {
+  const out = document.createElement("canvas");
+  out.width = src.width; out.height = src.height;
+  const ctx = out.getContext("2d");
+  ctx.translate(src.width, 0); ctx.scale(-1, 1);
+  ctx.drawImage(src, 0, 0);
+  return out;
 }
 
 function applyTransform() {
@@ -686,10 +763,20 @@ function applyTransform() {
     state.panX = (stage.clientWidth - canvas.width * state.scale) / 2;
     state.panY = (stage.clientHeight - canvas.height * state.scale) / 2;
   }
-  canvas.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.scale})`;
+  const sx = state.mirrored ? -state.scale : state.scale;
+  const extraX = state.mirrored ? canvas.width * state.scale : 0;
+  canvas.style.transform = `translate(${state.panX + extraX}px, ${state.panY}px) scale(${sx}, ${state.scale})`;
   canvas.style.transformOrigin = "0 0";
   $("zoomLabel").textContent = Math.round(state.scale * 100) + "%";
 }
+
+$("btnMirror").addEventListener("click", () => {
+  state.mirrored = !state.mirrored;
+  $("btnMirror").textContent = state.mirrored ? "View: Reverse (mirrored)" : "View: Surface (normal)";
+  $("btnMirror").classList.toggle("active", state.mirrored);
+  applyTransform();
+  if (!$("compareOverlay").classList.contains("hidden")) drawCompare();
+});
 
 /* ---- zoom / pan ---- */
 $("zoomIn").addEventListener("click", () => { state.scale = clamp((state.scale || 1) * 1.25, 0.02, 8); applyTransform(); });
@@ -705,24 +792,206 @@ stage.addEventListener("wheel", (e) => {
 }, { passive: false });
 
 let panning = false, lastX = 0, lastY = 0;
-stage.addEventListener("mousedown", (e) => { panning = true; lastX = e.clientX; lastY = e.clientY; $("mainCanvas").classList.add("grabbing"); });
+stage.addEventListener("mousedown", (e) => {
+  if (state.rulerMode) { rulerMouseDown(e); return; }
+  panning = true; lastX = e.clientX; lastY = e.clientY; $("mainCanvas").classList.add("grabbing");
+});
 window.addEventListener("mousemove", (e) => {
+  if (rulerDragging) { rulerMouseMove(e); return; }
   if (!panning) return;
   state.panX += e.clientX - lastX; state.panY += e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   applyTransform();
 });
-window.addEventListener("mouseup", () => { panning = false; $("mainCanvas").classList.remove("grabbing"); });
+window.addEventListener("mouseup", () => {
+  rulerDragging = false;
+  panning = false; $("mainCanvas").classList.remove("grabbing");
+});
 window.addEventListener("resize", () => { if (state.scale != null) return; applyTransform(); });
+
+/* ---- ruler ---- */
+let rulerDragging = false, rulerP1Screen = null, rulerP1File = null;
+
+$("btnRuler").addEventListener("click", () => {
+  state.rulerMode = !state.rulerMode;
+  $("btnRuler").classList.toggle("active", state.rulerMode);
+  $("canvasStage").classList.toggle("ruler-active", state.rulerMode);
+  $("rulerSvg").classList.toggle("active", state.rulerMode);
+  if (!state.rulerMode) $("rulerSvg").innerHTML = "";
+});
+
+// converts a mouse position into a pixel coordinate in the ORIGINAL file's
+// resolution (undoing pan/zoom/mirror and the interactive-view downscale)
+// so measurements stay correct regardless of the performance-cap scaling.
+function screenToFilePixels(clientX, clientY) {
+  const stageRect = stage.getBoundingClientRect();
+  const canvas = $("mainCanvas");
+  const sx = clientX - stageRect.left, sy = clientY - stageRect.top;
+  const extraX = state.mirrored ? canvas.width * state.scale : 0;
+  const clx = state.mirrored ? (state.panX + extraX - sx) / state.scale : (sx - state.panX) / state.scale;
+  const cly = (sy - state.panY) / state.scale;
+  const ref = state.plates[0];
+  const fileScale = ref ? ref.width / canvas.width : 1;
+  return { x: clx * fileScale, y: cly * fileScale, dpi: ref ? ref.dpi : null };
+}
+
+function rulerMouseDown(e) {
+  const stageRect = stage.getBoundingClientRect();
+  rulerDragging = true;
+  rulerP1Screen = { sx: e.clientX - stageRect.left, sy: e.clientY - stageRect.top };
+  rulerP1File = screenToFilePixels(e.clientX, e.clientY);
+}
+
+function rulerMouseMove(e) {
+  const stageRect = stage.getBoundingClientRect();
+  const p2Screen = { sx: e.clientX - stageRect.left, sy: e.clientY - stageRect.top };
+  const p2File = screenToFilePixels(e.clientX, e.clientY);
+  const dx = p2File.x - rulerP1File.x, dy = p2File.y - rulerP1File.y;
+  const pxDist = Math.sqrt(dx * dx + dy * dy);
+  let label = Math.round(pxDist) + " px";
+  if (rulerP1File.dpi) {
+    const inches = pxDist / rulerP1File.dpi;
+    label += ` · ${inches.toFixed(3)}in · ${(inches * 25.4).toFixed(1)}mm`;
+  }
+  const midX = (rulerP1Screen.sx + p2Screen.sx) / 2, midY = (rulerP1Screen.sy + p2Screen.sy) / 2 - 10;
+  $("rulerSvg").innerHTML = `
+    <line x1="${rulerP1Screen.sx}" y1="${rulerP1Screen.sy}" x2="${p2Screen.sx}" y2="${p2Screen.sy}"></line>
+    <circle cx="${rulerP1Screen.sx}" cy="${rulerP1Screen.sy}" r="4"></circle>
+    <circle cx="${p2Screen.sx}" cy="${p2Screen.sy}" r="4"></circle>
+    <text x="${midX}" y="${midY}" text-anchor="middle">${label}</text>
+  `;
+}
 
 /* ---- export snapshot ---- */
 $("btnExportPng").addEventListener("click", () => {
-  $("mainCanvas").toBlob(blob => {
+  buildFullResComposite().toBlob(blob => {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${state.jobName}_composite-check.png`;
     a.click();
   });
+});
+
+/* ============================================================
+   Checklist + QC report
+   ============================================================ */
+function checklistStorageKey() { return "tiffcheck_checklist_" + state.jobName; }
+
+function loadChecklistState() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(checklistStorageKey())); } catch (e) { /* ignore corrupt data */ }
+  if (saved && Array.isArray(saved.items)) {
+    state.checklist = saved.items;
+    state.operatorName = saved.operator || "";
+  } else {
+    state.checklist = DEFAULT_CHECKLIST.map(text => ({ id: uid(), text, checked: false, note: "" }));
+  }
+  $("operatorName").value = state.operatorName;
+}
+
+function saveChecklistState() {
+  try {
+    localStorage.setItem(checklistStorageKey(), JSON.stringify({ operator: state.operatorName, items: state.checklist }));
+  } catch (e) { /* localStorage unavailable (private browsing, quota) - checklist still works, just won't persist */ }
+}
+
+function renderChecklist() {
+  const wrap = $("checklistItems");
+  wrap.innerHTML = "";
+  state.checklist.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "cl-item" + (item.checked ? " checked" : "");
+    row.innerHTML = `
+      <input type="checkbox" ${item.checked ? "checked" : ""}>
+      <div style="flex:1;">
+        <div class="cl-text">${escapeHtml(item.text)}</div>
+        <input type="text" class="cl-note" placeholder="note (optional)" value="${escapeHtml(item.note || "")}">
+      </div>
+      <button class="cl-remove" title="Remove this item">✕</button>
+    `;
+    row.querySelector('input[type="checkbox"]').addEventListener("change", (e) => {
+      item.checked = e.target.checked;
+      row.classList.toggle("checked", item.checked);
+      updateClProgress();
+      saveChecklistState();
+    });
+    row.querySelector(".cl-note").addEventListener("input", (e) => {
+      item.note = e.target.value;
+      saveChecklistState();
+    });
+    row.querySelector(".cl-remove").addEventListener("click", () => {
+      state.checklist = state.checklist.filter(i => i.id !== item.id);
+      renderChecklist();
+      saveChecklistState();
+    });
+    wrap.appendChild(row);
+  });
+  updateClProgress();
+}
+
+function updateClProgress() {
+  const total = state.checklist.length, done = state.checklist.filter(i => i.checked).length;
+  $("clProgress").textContent = total ? `${done} of ${total}` : "";
+}
+
+$("operatorName").addEventListener("input", (e) => { state.operatorName = e.target.value; saveChecklistState(); });
+
+function addChecklistItem() {
+  const input = $("clNewItem");
+  const text = input.value.trim();
+  if (!text) return;
+  state.checklist.push({ id: uid(), text, checked: false, note: "" });
+  input.value = "";
+  renderChecklist();
+  saveChecklistState();
+}
+$("clAddBtn").addEventListener("click", addChecklistItem);
+$("clNewItem").addEventListener("keydown", (e) => { if (e.key === "Enter") addChecklistItem(); });
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+function buildReportHtml() {
+  const now = new Date();
+  const total = state.checklist.length, done = state.checklist.filter(i => i.checked).length;
+  const snapshotDataUrl = $("mainCanvas").toDataURL("image/png");
+  const rows = state.checklist.map(i => `
+    <tr>
+      <td style="width:28px;text-align:center;">${i.checked ? "✅" : "⬜"}</td>
+      <td>${escapeHtml(i.text)}</td>
+      <td style="color:#666;">${escapeHtml(i.note || "")}</td>
+    </tr>`).join("");
+  const plateRows = state.order.map(id => {
+    const p = plateById(id);
+    return `<tr><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${cmykHex(p.color)};border:1px solid #333;vertical-align:middle;"></span></td><td>${escapeHtml(p.name)}</td><td>${p.visible ? "on" : "off"}</td></tr>`;
+  }).join("");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>QC Report — ${escapeHtml(state.jobName)}</title>
+  <style>
+    body{font:14px/1.4 -apple-system,Arial,sans-serif;max-width:820px;margin:24px auto;color:#222;}
+    h1{font-size:20px;margin-bottom:0;} .meta{color:#666;margin-top:4px;margin-bottom:20px;}
+    table{border-collapse:collapse;width:100%;margin-bottom:24px;} td,th{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left;font-size:13px;}
+    img{max-width:100%;border:1px solid #ccc;}
+    .summary{display:inline-block;background:#eef5ee;border:1px solid #bcd9bc;border-radius:6px;padding:6px 12px;font-weight:600;}
+  </style></head><body>
+  <h1>QC Report — ${escapeHtml(state.jobName)}</h1>
+  <div class="meta">Checked by <strong>${escapeHtml(state.operatorName || "—")}</strong> on ${now.toLocaleString()}${state.mirrored ? " · view: Reverse (mirrored)" : " · view: Surface (normal)"}</div>
+  <div class="summary">${done} of ${total} checklist items confirmed</div>
+  <h3>Checklist</h3>
+  <table>${rows || "<tr><td colspan=3>No checklist items.</td></tr>"}</table>
+  <h3>Plates (top of table = top of stack)</h3>
+  <table>${plateRows}</table>
+  <h3>Composite snapshot</h3>
+  <img src="${snapshotDataUrl}">
+  </body></html>`;
+}
+
+$("btnSaveReport").addEventListener("click", () => {
+  const safeOperator = (state.operatorName || "operator").replace(/[^a-z0-9]+/gi, "_");
+  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 16);
+  const blob = new Blob([buildReportHtml()], { type: "text/html" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${state.jobName}_${safeOperator}_${stamp}_QC-Report.html`;
+  a.click();
 });
 
 /* ============================================================
@@ -758,6 +1027,18 @@ function loadJpegAndOpenCompare(file) {
   img.src = URL.createObjectURL(file);
 }
 
+function drawMainMirrorAware(ctx, w, h) {
+  const main = $("mainCanvas");
+  if (state.mirrored) {
+    ctx.save();
+    ctx.translate(w, 0); ctx.scale(-1, 1);
+    ctx.drawImage(main, 0, 0, w, h);
+    ctx.restore();
+  } else {
+    ctx.drawImage(main, 0, 0, w, h);
+  }
+}
+
 function drawCompare() {
   const canvas = $("compareCanvas");
   const main = $("mainCanvas");
@@ -770,10 +1051,10 @@ function drawCompare() {
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     } else {
-      ctx.drawImage(main, 0, 0);
+      drawMainMirrorAware(ctx, canvas.width, canvas.height);
     }
   } else {
-    ctx.drawImage(main, 0, 0);
+    drawMainMirrorAware(ctx, canvas.width, canvas.height);
     if (img) {
       ctx.globalAlpha = (+$("compareSlider").value) / 100;
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);

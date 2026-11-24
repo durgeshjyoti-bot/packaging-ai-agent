@@ -73,6 +73,25 @@
     </div>
     <div class="canvas-stage" id="canvasStage">
       <canvas id="mainCanvas"></canvas>
+      <svg id="rulerSvg"></svg>
+    </div>
+    <div class="checklist-panel">
+      <div class="cl-section">
+        <label class="cl-label">Checked by</label>
+        <input type="text" id="operatorName" placeholder="Operator name">
+      </div>
+      <div class="cl-section">
+        <div class="cl-row-head">
+          <label class="cl-label">Prepress checklist</label>
+          <span class="cl-progress" id="clProgress"></span>
+        </div>
+        <div id="checklistItems"></div>
+        <div class="cl-add-row">
+          <input type="text" id="clNewItem" placeholder="Add a check item…">
+          <button id="clAddBtn">+</button>
+        </div>
+      </div>
+      <button class="primary" id="btnSaveReport" style="width:100%;margin-top:8px;">Save QC Report</button>
     </div>
   </div>
   <div class="bottom-bar" id="bottomBar">
@@ -82,6 +101,8 @@
       <button id="zoomIn">+</button>
       <button id="zoomFit">Fit</button>
     </div>
+    <button id="btnMirror" title="Flip the view to match how you're checking it — reverse-read engraving files vs. a normal-reading proof">View: Surface (normal)</button>
+    <button id="btnRuler" title="Click-drag on the canvas to measure a distance">Ruler</button>
     <div class="sep"></div>
     <button id="allOn">All on</button>
     <button id="allOff">All off</button>
