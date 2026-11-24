@@ -1,0 +1,39 @@
+name: Build TIFF Plate Checker desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "tiff-check-desktop/**"
+      - ".github/workflows/build-desktop.yml"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            script: build:win
+            artifact: windows-installer
+          - os: macos-latest
+            script: build:mac
+            artifact: mac-installer
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tiff-check-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run ${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            tiff-check-desktop/dist/*.exe
+            tiff-check-desktop/dist/*.dmg
+          if-no-files-found: error
