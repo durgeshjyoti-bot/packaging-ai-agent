@@ -68,9 +68,21 @@ toggling still feels slow, turn on **Fast Preview** in the bottom bar — it
 switches the interactive view to a capped-resolution copy (long edge
 ≤1600px) purely for speed. This is an explicit, visible choice you make per
 job, not something the app decides for you. Either way, the **ruler**
-measures in the original file's real pixels/inches/mm, and **Export
-Snapshot** always rebuilds the composite at full resolution for the actual
-saved file, regardless of the Fast Preview setting.
+measures in the original file's real pixels/inches/mm.
+
+### Hard ceiling on extremely large plates
+
+Browsers silently fail to hold pixel data in a `<canvas>` past a certain
+size — confirmed in testing: a 23400×14500px (~339 megapixel) plate came
+back completely blank with no error at all. To prevent that, every canvas
+this app builds is capped at 8000px on the long edge (`CANVAS_SAFE_DIM` in
+`app.js`). A plate over that size is shown at a reduced (but correct, not
+blank/corrupted) resolution, flagged on its card in the Assign screen with
+the real vs. shown size. The ruler and the dpi shown always refer to the
+**real** file size regardless; **Export Snapshot** is capped the same way,
+since there's no way to build a browser canvas past this ceiling for
+export either — for a job this large, a snapshot this tool exports will
+not be pixel-for-pixel the original file size.
 
 ## Known limitations (MVP)
 

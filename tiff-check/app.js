@@ -25,7 +25,12 @@ const state = {
 
 const FALLBACK_PALETTE = ["#808080", "#ff8c00", "#8a2be2", "#8b4513", "#20b2aa", "#dc143c", "#2e8b57", "#4169e1"];
 const FAST_PREVIEW_DIM = 1600; // long-edge cap used only when Fast Preview is explicitly turned on
-const HARD_SAFETY_DIM = 8000;  // absolute ceiling regardless of mode, to avoid exhausting browser canvas memory on an extreme file
+// Browsers silently fail to hold pixel data in a <canvas> once its area gets large enough -
+// confirmed in testing: a 23400x14500 (~339 megapixel) canvas comes back completely blank
+// with no error. This cap keeps every canvas we build safely under that ceiling; plate.width/
+// plate.height (the true native pixel size, from the TIFF header) are never changed by it, so
+// dpi/ruler/export-size math and mismatch detection stay correct against the real file.
+const CANVAS_SAFE_DIM = 8000;
 
 const DEFAULT_CHECKLIST = [
   "Logo is the correct, current version and color",
@@ -252,9 +257,15 @@ async function finalizePlateSelection(headerList) {
 
 async function decodePlate(h, refSize) {
   UTIF.decodeImage(h.buf, h.page, h.ifds);
-  const rgba = UTIF.toRGBA8(h.page);
+  const rawRgba = UTIF.toRGBA8(h.page);
   const w = h.page.width, h_ = h.page.height;
   const isComposite = h.samplesPerPixel > 1;
+
+  // plate.width/height below stay the TRUE native size from the TIFF header, always -
+  // used for dpi/ruler math and mismatch detection. render{Width,Height} are what we
+  // actually build a canvas at, which CANVAS_SAFE_DIM may reduce for an extreme file.
+  const render = computeRenderDims(w, h_);
+  const rgba = render.capped ? downsampleRGBA(rawRgba, w, h_, render.w, render.h) : rawRgba;
 
   const nameNoExt = h.name.replace(/\.[^.]+$/, "");
   const guess = guessColorFromName(nameNoExt);
@@ -272,10 +283,12 @@ async function decodePlate(h, refSize) {
     id: uid(),
     name: h.name,
     width: w, height: h_,
+    renderWidth: render.w, renderHeight: render.h,
+    safetyCapped: render.capped,
     dpi: h.dpi,
     mismatch: (w + "x" + h_) !== refSize,
     isComposite,
-    rgba,                 // raw decoded RGBA (used directly for composite TIFFs)
+    rgba,                 // raw decoded RGBA at render size (used directly for composite TIFFs)
     color: cmyk,
     colorKind: kind,      // "normal" | "white" | "varnish" | "unassigned"
     visible: true,
@@ -285,11 +298,36 @@ async function decodePlate(h, refSize) {
   return plate;
 }
 
+// Keeps every canvas we build at or under CANVAS_SAFE_DIM on its long edge, preserving
+// aspect ratio. plate.width/height (the real file size) are never touched by this.
+function computeRenderDims(w, h) {
+  const maxDim = Math.max(w, h);
+  if (maxDim <= CANVAS_SAFE_DIM) return { w, h, capped: false };
+  const s = CANVAS_SAFE_DIM / maxDim;
+  return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)), capped: true };
+}
+
+// Plain nearest-neighbor downsample on the typed array itself (no canvas involved,
+// so it isn't subject to the same canvas-area ceiling this is working around).
+function downsampleRGBA(src, srcW, srcH, dstW, dstH) {
+  const dst = new Uint8Array(dstW * dstH * 4);
+  for (let y = 0; y < dstH; y++) {
+    const sy = Math.min(srcH - 1, Math.floor(y * srcH / dstH));
+    const rowOff = sy * srcW;
+    for (let x = 0; x < dstW; x++) {
+      const sx = Math.min(srcW - 1, Math.floor(x * srcW / dstW));
+      const so = (rowOff + sx) * 4, dOff = (y * dstW + x) * 4;
+      dst[dOff] = src[so]; dst[dOff + 1] = src[so + 1]; dst[dOff + 2] = src[so + 2]; dst[dOff + 3] = src[so + 3];
+    }
+  }
+  return dst;
+}
+
 /* Tint a decoded grayscale separation with its assigned color, using
    ink coverage (dark = more ink) as the alpha channel so layers can be
    multiply-blended like real overprinting ink. */
 function buildLayerCanvas(plate) {
-  const w = plate.width, h = plate.height;
+  const w = plate.renderWidth, h = plate.renderHeight;
   const cnv = document.createElement("canvas");
   cnv.width = w; cnv.height = h;
   const ctx = cnv.getContext("2d");
@@ -319,15 +357,12 @@ function buildLayerCanvas(plate) {
 }
 
 /* The interactive view is built from workLayerCanvas. By default that's the
-   SAME canvas as the full-resolution layerCanvas (no quality loss, since
-   fine prepress detail — hairlines, small type, barcodes — must stay
-   checkable), capped only by a generous hard safety ceiling to avoid
-   exhausting browser memory on a truly extreme file. Fast Preview is an
-   explicit opt-in for when a specific job is too heavy to toggle smoothly
-   at full resolution; export/ruler always use the real, full-res data. */
+   SAME canvas as layerCanvas (no further quality loss beyond the safety cap
+   above), since fine prepress detail — hairlines, small type, barcodes —
+   must stay checkable. Fast Preview is an explicit opt-in for when a
+   specific job is too heavy to toggle smoothly even at that size. */
 function refreshWorkCanvas(plate) {
-  const targetDim = state.fastPreview ? FAST_PREVIEW_DIM : HARD_SAFETY_DIM;
-  plate.workLayerCanvas = downscaleCanvas(plate.layerCanvas, targetDim);
+  plate.workLayerCanvas = state.fastPreview ? downscaleCanvas(plate.layerCanvas, FAST_PREVIEW_DIM) : plate.layerCanvas;
 }
 
 function downscaleCanvas(fullCanvas, targetDim) {
@@ -374,6 +409,7 @@ function renderAssignGrid() {
       <div class="name">${plate.name}</div>
       <div class="meta">${plate.width}×${plate.height}px · ${dpiLabel}</div>
       <div class="meta">${kindLabel}</div>
+      ${plate.safetyCapped ? `<div class="meta" style="color:#e0a736;">Shown at ${plate.renderWidth}×${plate.renderHeight}px — this file is too large for a browser canvas at full size. Ruler/dpi still use the real ${plate.width}×${plate.height}px.</div>` : ""}
     `;
     card.prepend(thumb);
 
