@@ -48,10 +48,21 @@ that step genuinely has to run on a Mac, or in CI with a macOS runner.
 ### Automatic builds via GitHub Actions
 
 `.github/workflows/build-desktop.yml` builds both installers on every push
-that touches this folder, using a Windows runner and a macOS runner, and
-uploads them as downloadable workflow artifacts — so you can get a real
-`.exe` and `.dmg` without needing your own Windows/Mac dev machine. Check
-the "Actions" tab on GitHub after pushing, or run it manually from there.
+that touches this folder, using a Windows runner and a macOS runner — so you
+get a real `.exe` and `.dmg` without needing your own Windows/Mac dev
+machine.
+
+**Get them from the repo's Releases page** (fastest, no extra zip to
+extract): every successful build publishes both installers to a single
+rolling release tagged `desktop-latest` — that link always has the newest
+build, and it's the repo's "Latest release" too, so it's one click from the
+repo's main page. Downloading from a GitHub *release* is also noticeably
+faster than downloading a CI *artifact* (what the old flow used): releases
+are served the same way as any normal GitHub download, while Actions
+artifacts go through a slower path and get wrapped in an extra zip around a
+file that's often already compressed. The per-run workflow artifacts (in the
+"Actions" tab) still exist alongside this, mainly useful for debugging one
+specific run.
 
 **The macOS build is unsigned** (no Apple Developer certificate is
 configured, and setting one up isn't something that can be done from here).
