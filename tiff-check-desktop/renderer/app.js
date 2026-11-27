@@ -22,7 +22,7 @@ const state = {
   rulerMode: false,
   operatorName: "",
   vegLogoChecked: false,
-  checklist: [],
+  densityMode: false,
   fastPreview: false // opt-in only: full resolution is the default so fine detail (barcodes, small text, trapping) is never silently blurred
 };
 
@@ -34,24 +34,6 @@ const FAST_PREVIEW_DIM = 1600; // long-edge cap used only when Fast Preview is e
 // plate.height (the true native pixel size, from the TIFF header) are never changed by it, so
 // dpi/ruler/export-size math and mismatch detection stay correct against the real file.
 const CANVAS_SAFE_DIM = 8000;
-
-const DEFAULT_CHECKLIST = [
-  "Logo is the correct, current version and color",
-  "Barcode scans correctly and has proper quiet zone",
-  "Mandatory/legal text present and correct (ingredients, nutrition, warnings)",
-  "Black text/elements set to overprint 100K (not registration black)",
-  "Spot colors correctly named and matched to Pantone/customer standard",
-  "Image resolution adequate at final size (no pixelation)",
-  "Bleed and trim marks correct, artwork matches dieline",
-  "Varnish/foil plate registered correctly to print",
-  "Date code / batch code placeholder present and positioned correctly",
-  "Required regulatory/recycling marks present",
-  "Reverse/mirror orientation correct for this engraving process",
-  "Trapping checked on every color pair (no white gaps/halos)",
-  "No stray spot colors or unused channels in the file",
-  "Total ink coverage within press limit",
-  "Final file matches customer-approved proof"
-];
 
 /* ============================================================
    Small helpers
@@ -731,6 +713,8 @@ function applySession(data) {
 function enterViewer() {
   showScreen("screen-viewer");
   $("viewerJobName").textContent = state.jobName;
+  const dpi = state.plates[0] && state.plates[0].dpi;
+  $("layerPanelSub").textContent = `${state.plates.length} plate${state.plates.length === 1 ? "" : "s"}${dpi ? " · ~" + Math.round(dpi) + " dpi" : ""}`;
   renderLayerList();
   state.scale = null; // force a fit on first paint
   state.mirrored = false;
@@ -746,8 +730,9 @@ function enterViewer() {
   $("btnFastPreview").textContent = "Fast Preview: Off";
   $("btnFastPreview").classList.remove("active");
   state.plates.forEach(refreshWorkCanvas);
+  state.densityMode = false;
+  $("btnDensity").classList.remove("active");
   loadChecklistState();
-  renderChecklist();
   recomposite();
 }
 $("btnBackToAssign").addEventListener("click", () => showScreen("screen-assign"));
@@ -758,7 +743,7 @@ function renderLayerList() {
   const wrap = $("layerList");
   wrap.innerHTML = "";
   // top of list = top of stack, so render in reverse order
-  [...state.order].reverse().forEach(id => {
+  [...state.order].reverse().forEach((id, i) => {
     const plate = plateById(id);
     const row = document.createElement("div");
     row.className = "layer-item";
@@ -766,6 +751,7 @@ function renderLayerList() {
     row.dataset.id = id;
     row.innerHTML = `
       <span class="drag-handle">⠿</span>
+      <span class="seq">${i + 1}</span>
       <input type="checkbox" ${plate.visible ? "checked" : ""}>
       <span class="swatch" style="background:${cmykHex(plate.color)}"></span>
       <span class="lname" title="${plate.name}">${plate.name}</span>
@@ -958,16 +944,46 @@ window.addEventListener("mouseup", () => {
 });
 window.addEventListener("resize", () => { if (state.scale != null) return; applyTransform(); });
 
-// live cursor-position-in-pixels readout (bottom-left of the canvas)
+// Eyedropper/density tool: ink coverage (%) of each plate at a file pixel,
+// read straight from that plate's own decoded grayscale data (not from the
+// rendered/tinted composite), so it's the real ink percentage, not a color
+// guess from an RGB sample.
+function densityAtPoint(fx, fy) {
+  return [...state.order].reverse().map(id => {
+    const p = plateById(id);
+    if (p.isComposite) return null;
+    const rx = Math.round(fx * p.renderWidth / p.width);
+    const ry = Math.round(fy * p.renderHeight / p.height);
+    if (rx < 0 || ry < 0 || rx >= p.renderWidth || ry >= p.renderHeight) {
+      return { name: p.name, percent: null };
+    }
+    const idx = (ry * p.renderWidth + rx) * 4;
+    const ink = 255 - p.rgba[idx];
+    return { name: p.name, percent: Math.round((ink / 255) * 100) };
+  }).filter(Boolean);
+}
+
+$("btnDensity").addEventListener("click", () => {
+  state.densityMode = !state.densityMode;
+  $("btnDensity").classList.toggle("active", state.densityMode);
+});
+
+// live cursor-position-in-pixels (and, in Density mode, per-plate ink %) readout
 stage.addEventListener("mousemove", (e) => {
   if (!state.plates.length) return;
   const stageRect = stage.getBoundingClientRect();
   const sx = e.clientX - stageRect.left, sy = e.clientY - stageRect.top;
-  const canvas = $("mainCanvas");
   if (sx < 0 || sy < 0 || sx > stageRect.width || sy > stageRect.height) return;
   const p = screenToFilePixels(e.clientX, e.clientY);
   const ro = $("pixelReadout");
-  ro.textContent = `X: ${Math.round(p.x)}px  Y: ${Math.round(p.y)}px`;
+  let text = `X: ${Math.round(p.x)}px  Y: ${Math.round(p.y)}px`;
+  if (state.densityMode) {
+    const rows = densityAtPoint(p.x, p.y);
+    const total = rows.reduce((sum, r) => sum + (r.percent || 0), 0);
+    text += "\n" + rows.map(r => `${r.name}: ${r.percent == null ? "—" : r.percent + "%"}`).join("\n");
+    text += `\nTotal: ${total}%`;
+  }
+  ro.textContent = text;
   ro.classList.add("visible");
 });
 stage.addEventListener("mouseleave", () => $("pixelReadout").classList.remove("visible"));
@@ -1053,21 +1069,15 @@ $("btnExportPng").addEventListener("click", () => {
 });
 
 /* ============================================================
-   Checklist + QC report
+   QC report (operator name + veg logo check + plate list + snapshot)
    ============================================================ */
 function checklistStorageKey() { return "tiffcheck_checklist_" + state.jobName; }
 
 function loadChecklistState() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(checklistStorageKey())); } catch (e) { /* ignore corrupt data */ }
-  if (saved && Array.isArray(saved.items)) {
-    state.checklist = saved.items;
-    state.operatorName = saved.operator || "";
-    state.vegLogoChecked = !!saved.vegLogoChecked;
-  } else {
-    state.checklist = DEFAULT_CHECKLIST.map(text => ({ id: uid(), text, checked: false, note: "" }));
-    state.vegLogoChecked = false;
-  }
+  state.operatorName = (saved && saved.operator) || "";
+  state.vegLogoChecked = !!(saved && saved.vegLogoChecked);
   $("operatorName").value = state.operatorName;
   $("vegLogoCheck").checked = state.vegLogoChecked;
 }
@@ -1075,78 +1085,19 @@ function loadChecklistState() {
 function saveChecklistState() {
   try {
     localStorage.setItem(checklistStorageKey(), JSON.stringify({
-      operator: state.operatorName, items: state.checklist, vegLogoChecked: state.vegLogoChecked
+      operator: state.operatorName, vegLogoChecked: state.vegLogoChecked
     }));
-  } catch (e) { /* localStorage unavailable (private browsing, quota) - checklist still works, just won't persist */ }
+  } catch (e) { /* localStorage unavailable (private browsing, quota) - still works, just won't persist */ }
 }
 
 $("vegLogoCheck").addEventListener("change", (e) => { state.vegLogoChecked = e.target.checked; saveChecklistState(); });
-
-function renderChecklist() {
-  const wrap = $("checklistItems");
-  wrap.innerHTML = "";
-  state.checklist.forEach(item => {
-    const row = document.createElement("div");
-    row.className = "cl-item" + (item.checked ? " checked" : "");
-    row.innerHTML = `
-      <input type="checkbox" ${item.checked ? "checked" : ""}>
-      <div style="flex:1;">
-        <div class="cl-text">${escapeHtml(item.text)}</div>
-        <input type="text" class="cl-note" placeholder="note (optional)" value="${escapeHtml(item.note || "")}">
-      </div>
-      <button class="cl-remove" title="Remove this item">✕</button>
-    `;
-    row.querySelector('input[type="checkbox"]').addEventListener("change", (e) => {
-      item.checked = e.target.checked;
-      row.classList.toggle("checked", item.checked);
-      updateClProgress();
-      saveChecklistState();
-    });
-    row.querySelector(".cl-note").addEventListener("input", (e) => {
-      item.note = e.target.value;
-      saveChecklistState();
-    });
-    row.querySelector(".cl-remove").addEventListener("click", () => {
-      state.checklist = state.checklist.filter(i => i.id !== item.id);
-      renderChecklist();
-      saveChecklistState();
-    });
-    wrap.appendChild(row);
-  });
-  updateClProgress();
-}
-
-function updateClProgress() {
-  const total = state.checklist.length, done = state.checklist.filter(i => i.checked).length;
-  $("clProgress").textContent = total ? `${done} of ${total}` : "";
-}
-
 $("operatorName").addEventListener("input", (e) => { state.operatorName = e.target.value; saveChecklistState(); });
-
-function addChecklistItem() {
-  const input = $("clNewItem");
-  const text = input.value.trim();
-  if (!text) return;
-  state.checklist.push({ id: uid(), text, checked: false, note: "" });
-  input.value = "";
-  renderChecklist();
-  saveChecklistState();
-}
-$("clAddBtn").addEventListener("click", addChecklistItem);
-$("clNewItem").addEventListener("keydown", (e) => { if (e.key === "Enter") addChecklistItem(); });
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 function buildReportHtml() {
   const now = new Date();
-  const total = state.checklist.length, done = state.checklist.filter(i => i.checked).length;
   const snapshotDataUrl = $("mainCanvas").toDataURL("image/png");
-  const rows = state.checklist.map(i => `
-    <tr>
-      <td style="width:28px;text-align:center;">${i.checked ? "✅" : "⬜"}</td>
-      <td>${escapeHtml(i.text)}</td>
-      <td style="color:#666;">${escapeHtml(i.note || "")}</td>
-    </tr>`).join("");
   const plateRows = state.order.map(id => {
     const p = plateById(id);
     return `<tr><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${cmykHex(p.color)};border:1px solid #333;vertical-align:middle;"></span></td><td>${escapeHtml(p.name)}</td><td>${p.visible ? "on" : "off"}</td></tr>`;
@@ -1161,9 +1112,7 @@ function buildReportHtml() {
   </style></head><body>
   <h1>QC Report — ${escapeHtml(state.jobName)}</h1>
   <div class="meta">Checked by <strong>${escapeHtml(state.operatorName || "—")}</strong> on ${now.toLocaleString()}${state.mirrored ? " · view: Reverse (mirrored)" : " · view: Surface (normal)"}${state.rotation ? " · rotated " + state.rotation + "°" : ""}</div>
-  <div class="summary">${state.vegLogoChecked ? "✅" : "⬜"} Veg/Non-veg logo &nbsp;·&nbsp; ${done} of ${total} checklist items confirmed</div>
-  <h3>Checklist</h3>
-  <table>${rows || "<tr><td colspan=3>No checklist items.</td></tr>"}</table>
+  <div class="summary">${state.vegLogoChecked ? "✅" : "⬜"} Veg/Non-veg logo correct &amp; registered</div>
   <h3>Plates (top of table = top of stack)</h3>
   <table>${plateRows}</table>
   <h3>Composite snapshot</h3>
@@ -1240,13 +1189,17 @@ function drawMainMirrorAware(ctx, w, h) {
 // plate) but the JPEG proof from the press/customer is usually a single-up
 // shot of one repeat - so the proof needs to be dragged/scaled into place
 // over one repeat before blink/slider comparison means anything.
-function drawJpegLayer(ctx, w, h) {
+function drawJpegLayer(ctx) {
   const img = state.compare.jpegImg;
   if (!img) return;
+  // draw at the proof's own real pixel size (not stretched to the composite's
+  // size) - the TIFF job is step-and-repeat and the proof is a single-up
+  // shot of one repeat, so they are never the same size, and stretching one
+  // to fill the other is exactly what made it impossible to align them
   ctx.save();
   ctx.translate(state.compare.jpegOffsetX, state.compare.jpegOffsetY);
   ctx.scale(state.compare.jpegScale, state.compare.jpegScale);
-  ctx.drawImage(img, 0, 0, w, h);
+  ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
   ctx.restore();
 }
 
@@ -1260,7 +1213,7 @@ function drawCompare() {
   if (state.compare.mode === "blink") {
     if (state.compare.blinkShowJpeg && img) {
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      drawJpegLayer(ctx, canvas.width, canvas.height);
+      drawJpegLayer(ctx);
     } else {
       drawMainMirrorAware(ctx, canvas.width, canvas.height);
     }
@@ -1268,7 +1221,7 @@ function drawCompare() {
     drawMainMirrorAware(ctx, canvas.width, canvas.height);
     if (img) {
       ctx.globalAlpha = (+$("compareSlider").value) / 100;
-      drawJpegLayer(ctx, canvas.width, canvas.height);
+      drawJpegLayer(ctx);
       ctx.globalAlpha = 1;
     }
   }

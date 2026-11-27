@@ -66,7 +66,7 @@
   </div>
   <div class="viewer-body">
     <div class="layer-panel">
-      <div class="panel-head">Plates <span class="panel-sub">drag to resequence</span></div>
+      <div class="panel-head">Separations <span class="panel-sub" id="layerPanelSub">drag to resequence</span></div>
       <div id="layerList"></div>
     </div>
     <div class="canvas-stage" id="canvasStage">
@@ -84,20 +84,6 @@
           <input type="checkbox" id="vegLogoCheck">
           <span>Veg / Non-veg logo correct &amp; registered</span>
         </label>
-        <button id="btnMirror" class="quick-toggle" title="Flip the view to match how you're checking it — reverse-read engraving files vs. a normal-reading proof">
-          <span class="icon">⇄</span><span id="btnMirrorLabel">View: Surface (normal)</span>
-        </button>
-      </div>
-      <div class="cl-section">
-        <div class="cl-row-head">
-          <label class="cl-label">Prepress checklist</label>
-          <span class="cl-progress" id="clProgress"></span>
-        </div>
-        <div id="checklistItems"></div>
-        <div class="cl-add-row">
-          <input type="text" id="clNewItem" placeholder="Add a check item…">
-          <button id="clAddBtn">+</button>
-        </div>
       </div>
       <button class="primary" id="btnSaveReport" style="width:100%;margin-top:8px;">Save QC Report</button>
     </div>
@@ -113,7 +99,12 @@
     <button id="rotateCcw" title="Rotate left 90°">⟲</button>
     <button id="rotateCw" title="Rotate right 90°">⟳</button>
     <div class="sep"></div>
+    <button id="btnMirror" title="Flip the view to match how you're checking it — reverse-read engraving files vs. a normal-reading proof">
+      <span class="icon">⇄</span><span id="btnMirrorLabel">View: Surface (normal)</span>
+    </button>
+    <div class="sep"></div>
     <button id="btnRuler" title="Click-drag on the canvas to measure a distance">⟺ Ruler</button>
+    <button id="btnDensity" title="Hover the canvas to read each plate's ink density (%) at that point, like an eyedropper">⏚ Density</button>
     <button id="btnFastPreview" title="Full resolution by default. Turn this on only if toggling colors feels slow on this job — it trades fine detail for speed.">Fast Preview: Off</button>
     <div class="sep"></div>
     <button id="allOn">All on</button>
