@@ -316,15 +316,35 @@ function computeRenderDims(w, h) {
 
 // Plain nearest-neighbor downsample on the typed array itself (no canvas involved,
 // so it isn't subject to the same canvas-area ceiling this is working around).
+// Area-averages each destination pixel over its full block of source pixels
+// (a box filter), not nearest-neighbor. This matters beyond just display
+// quality: ink "density" at a halftone screen is inherently a local-area
+// coverage percentage, not any single native pixel's binary value - nearest-
+// neighbor was effectively picking one arbitrary pixel from each block, so
+// the Density tool's readings jumped around instead of reporting a stable,
+// representative coverage percentage.
 function downsampleRGBA(src, srcW, srcH, dstW, dstH) {
   const dst = new Uint8Array(dstW * dstH * 4);
+  const xRatio = srcW / dstW, yRatio = srcH / dstH;
   for (let y = 0; y < dstH; y++) {
-    const sy = Math.min(srcH - 1, Math.floor(y * srcH / dstH));
-    const rowOff = sy * srcW;
+    const sy0 = Math.floor(y * yRatio);
+    const sy1 = Math.min(srcH, Math.max(sy0 + 1, Math.floor((y + 1) * yRatio)));
     for (let x = 0; x < dstW; x++) {
-      const sx = Math.min(srcW - 1, Math.floor(x * srcW / dstW));
-      const so = (rowOff + sx) * 4, dOff = (y * dstW + x) * 4;
-      dst[dOff] = src[so]; dst[dOff + 1] = src[so + 1]; dst[dOff + 2] = src[so + 2]; dst[dOff + 3] = src[so + 3];
+      const sx0 = Math.floor(x * xRatio);
+      const sx1 = Math.min(srcW, Math.max(sx0 + 1, Math.floor((x + 1) * xRatio)));
+      let r = 0, g = 0, b = 0, a = 0, count = 0;
+      for (let sy = sy0; sy < sy1; sy++) {
+        const rowOff = sy * srcW;
+        for (let sx = sx0; sx < sx1; sx++) {
+          const so = (rowOff + sx) * 4;
+          r += src[so]; g += src[so + 1]; b += src[so + 2]; a += src[so + 3];
+          count++;
+        }
+      }
+      const dOff = (y * dstW + x) * 4;
+      if (count > 0) {
+        dst[dOff] = r / count; dst[dOff + 1] = g / count; dst[dOff + 2] = b / count; dst[dOff + 3] = a / count;
+      }
     }
   }
   return dst;
@@ -1158,13 +1178,86 @@ $("btnCompareJpeg").addEventListener("click", async () => {
   openCompareWithBytes(await window.desktop.readFile(jpegFile.path));
 });
 
+// Reads dpi from a JPEG's JFIF or Exif header, if present. Returns {x,y} or
+// null. Best-effort: many web-exported JPEGs carry no real resolution info
+// at all, which is exactly why the Proof DPI field stays editable.
+function parseJpegDpi(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const ascii = (start, len) => {
+    let s = "";
+    for (let i = 0; i < len && start + i < bytes.length; i++) s += String.fromCharCode(bytes[start + i]);
+    return s;
+  };
+  if (bytes.length < 4 || dv.getUint16(0) !== 0xffd8) return null;
+  let offset = 2, jfif = null, exif = null;
+  while (offset + 4 <= bytes.length) {
+    if (dv.getUint8(offset) !== 0xff) break;
+    let marker = dv.getUint8(offset + 1);
+    while (marker === 0xff && offset + 2 < bytes.length) { offset++; marker = dv.getUint8(offset + 1); }
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+    if (marker === 0xda || offset + 4 > bytes.length) break; // start of scan data - no more header segments
+    const segLen = dv.getUint16(offset + 2);
+    if (marker === 0xe0 && segLen >= 14 && ascii(offset + 4, 5) === "JFIF\0") {
+      const base = offset + 4;
+      const units = dv.getUint8(base + 7);
+      const xd = dv.getUint16(base + 8), yd = dv.getUint16(base + 10);
+      if (xd > 0 && yd > 0) jfif = units === 2 ? { x: xd * 2.54, y: yd * 2.54 } : { x: xd, y: yd };
+    } else if (marker === 0xe1 && ascii(offset + 4, 6) === "Exif\0\0") {
+      exif = parseExifResolution(dv, offset + 4 + 6);
+    }
+    offset += 2 + segLen;
+  }
+  const result = exif || jfif;
+  // some tools (older Pillow among them) write a meaningless 1x1 "dpi"
+  // placeholder rather than omitting density entirely - never a real value
+  return (result && result.x >= 10 && result.y >= 10) ? result : null;
+}
+
+function parseExifResolution(dv, tiffStart) {
+  try {
+    const little = dv.getUint8(tiffStart) === 0x49; // 'I' => "II" little-endian
+    const g16 = (o) => dv.getUint16(tiffStart + o, little);
+    const g32 = (o) => dv.getUint32(tiffStart + o, little);
+    if (g16(2) !== 0x002a) return null;
+    const ifd = g32(4);
+    const count = g16(ifd);
+    let x = null, y = null, unit = 2;
+    for (let i = 0; i < count; i++) {
+      const e = ifd + 2 + i * 12;
+      const tag = g16(e);
+      if (tag === 0x011a || tag === 0x011b) {
+        const voff = g32(e + 8);
+        const num = g32(voff), den = g32(voff + 4);
+        const val = den ? num / den : 0;
+        if (tag === 0x011a) x = val; else y = val;
+      } else if (tag === 0x0128) {
+        unit = g16(e + 8);
+      }
+    }
+    if (!x || !y) return null;
+    if (unit === 3) { x *= 2.54; y *= 2.54; } // cm -> inch
+    return { x, y };
+  } catch (e) { return null; } // malformed/truncated Exif - fall back to JFIF or manual entry
+}
+
+// A proof JPEG and the job's TIFFs are almost never the same dpi (a common
+// case: proofs exported at 300dpi, engraving TIFFs at 508dpi) - drawing both
+// at face-value pixel size would make the proof the wrong physical size no
+// matter how it's dragged. Read the JPEG's own resolution where possible
+// (JFIF/Exif) to pre-scale it correctly; it's also an editable field so the
+// operator can correct/enter it when a proof has no embedded dpi.
 function openCompareWithBytes(bytes) {
+  const jobDpi = state.plates[0] && state.plates[0].dpi;
+  $("jobDpiHint").textContent = jobDpi ? `Job: ~${Math.round(jobDpi)} dpi` : "";
+  const parsedDpi = parseJpegDpi(bytes);
+  $("proofDpi").value = parsedDpi ? Math.round(parsedDpi.x) : "";
+
   const img = new Image();
   img.onload = () => {
     state.compare.jpegImg = img;
     state.compare.jpegOffsetX = 0;
     state.compare.jpegOffsetY = 0;
-    state.compare.jpegScale = 1;
+    recomputeProofScale();
     $("compareOverlay").classList.remove("hidden");
     $("compareSlider").value = 0;
     state.compare.mode = "slider";
@@ -1249,9 +1342,17 @@ $("btnPositionProof").addEventListener("click", () => {
   $("btnPositionProof").classList.toggle("active", state.compare.positioning);
   $("compareCanvas").classList.toggle("positioning", state.compare.positioning);
 });
-$("btnResetProofPosition").addEventListener("click", () => {
-  state.compare.jpegOffsetX = 0; state.compare.jpegOffsetY = 0; state.compare.jpegScale = 1;
+function recomputeProofScale() {
+  const jobDpi = state.plates[0] && state.plates[0].dpi;
+  const proofDpi = +$("proofDpi").value;
+  state.compare.jpegScale = (jobDpi && proofDpi > 0) ? jobDpi / proofDpi : 1;
   drawCompare();
+}
+$("proofDpi").addEventListener("input", recomputeProofScale);
+
+$("btnResetProofPosition").addEventListener("click", () => {
+  state.compare.jpegOffsetX = 0; state.compare.jpegOffsetY = 0;
+  recomputeProofScale();
 });
 
 let proofDragging = false, proofLastX = 0, proofLastY = 0;

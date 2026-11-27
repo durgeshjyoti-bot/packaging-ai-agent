@@ -119,7 +119,11 @@
     <span class="chint">Press <b>Space</b> or click to blink · drag slider to blend</span>
     <span class="spacer"></span>
     <button id="btnPositionProof" title="Drag the proof to align it with one repeat (your TIFF is step-and-repeat, the proof is usually a single-up); scroll over the proof to scale it">Position Proof</button>
-    <button id="btnResetProofPosition" title="Reset proof position and scale">Reset Position</button>
+    <button id="btnResetProofPosition" title="Reset proof position, and rescale it using the DPI values below so it starts at the correct physical size">Reset Position</button>
+    <label class="dpi-field" title="The proof JPEG's own resolution (read from its file when possible) - used with the job's dpi to scale the proof to the correct physical size">
+      Proof <input type="number" id="proofDpi" min="1" step="1" placeholder="dpi"> dpi
+    </label>
+    <span class="chint" id="jobDpiHint"></span>
     <div class="slider-wrap">
       <span style="color:#9aa1ab;font-size:11px;">Composite</span>
       <input type="range" id="compareSlider" min="0" max="100" value="0">
