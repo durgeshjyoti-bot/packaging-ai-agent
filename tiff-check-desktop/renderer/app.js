@@ -15,11 +15,13 @@ const state = {
   scale: 1,
   panX: 0,
   panY: 0,
-  compare: { mode: "slider", blinkShowJpeg: false, jpegImg: null },
+  compare: { mode: "slider", blinkShowJpeg: false, jpegImg: null, jpegOffsetX: 0, jpegOffsetY: 0, jpegScale: 1, positioning: false },
   fallbackIdx: 0,
   mirrored: false,
+  rotation: 0, // 0 | 90 | 180 | 270 - baked into the composite canvas itself, see rotateCanvas()
   rulerMode: false,
   operatorName: "",
+  vegLogoChecked: false,
   checklist: [],
   fastPreview: false // opt-in only: full resolution is the default so fine detail (barcodes, small text, trapping) is never silently blurred
 };
@@ -59,13 +61,25 @@ function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function extOf(name) { const m = /\.([a-z0-9]+)$/i.exec(name); return m ? m[1].toLowerCase() : ""; }
 function uid() { return "p" + Math.random().toString(36).slice(2, 10); }
 
+// Approximate on-screen appearance of real process ink (SWOP-ish reference
+// colors), not pure RGB primaries - plain (1-c)*(1-k) math makes cyan/magenta/
+// yellow look like saturated RGB screen colors, nothing like actual ink on
+// stock. Each channel is mixed in as a partial multiply-tint toward its ink's
+// real color, the same way plates are composited onto each other, so a
+// slider value of e.g. 40% cyan looks like 40% ink coverage, not 40% of a
+// cartoon-cyan RGB value.
+const INK_RGB = { c: [0, 174, 239], m: [236, 0, 140], y: [255, 242, 0], k: [35, 31, 32] };
 function cmykToRgb(c, m, y, k) {
-  c /= 100; m /= 100; y /= 100; k /= 100;
-  return [
-    Math.round(255 * (1 - c) * (1 - k)),
-    Math.round(255 * (1 - m) * (1 - k)),
-    Math.round(255 * (1 - y) * (1 - k))
-  ];
+  let r = 255, g = 255, b = 255;
+  for (const [ch, amt] of [["c", c], ["m", m], ["y", y], ["k", k]]) {
+    const a = clamp(amt, 0, 100) / 100;
+    if (a <= 0) continue;
+    const [ir, ig, ib] = INK_RGB[ch];
+    r = r * (1 - a) + (r * ir / 255) * a;
+    g = g * (1 - a) + (g * ig / 255) * a;
+    b = b * (1 - a) + (b * ib / 255) * a;
+  }
+  return [Math.round(r), Math.round(g), Math.round(b)];
 }
 function rgbToApproxCmyk(r, g, b) {
   r /= 255; g /= 255; b /= 255;
@@ -465,12 +479,17 @@ $("assignContinue").addEventListener("click", enterViewer);
 /* ============================================================
    Color popover (CMYK sliders + hue/sat wheel + presets)
    ============================================================ */
+// the standard process-color quick picks, as clearly-labeled named buttons
+// rather than just colored swatches
+const NAMED_COLORS = [
+  { label: "C", title: "Process Cyan", cmyk: { c: 100, m: 0, y: 0, k: 0 } },
+  { label: "M", title: "Process Magenta", cmyk: { c: 0, m: 100, y: 0, k: 0 } },
+  { label: "Y", title: "Process Yellow", cmyk: { c: 0, m: 0, y: 100, k: 0 } },
+  { label: "K", title: "Process Black", cmyk: { c: 0, m: 0, y: 0, k: 100 } },
+  { label: "White", title: "White ink (tinted for visibility)", cmyk: { c: 0, m: 0, y: 0, k: 0 }, kind: "white" },
+  { label: "Varnish", title: "Varnish/coating", cmyk: { c: 0, m: 0, y: 0, k: 0 }, kind: "varnish" }
+];
 const PRESETS = [
-  { label: "Process Cyan", cmyk: { c: 100, m: 0, y: 0, k: 0 } },
-  { label: "Process Magenta", cmyk: { c: 0, m: 100, y: 0, k: 0 } },
-  { label: "Process Yellow", cmyk: { c: 0, m: 0, y: 100, k: 0 } },
-  { label: "Process Black", cmyk: { c: 0, m: 0, y: 0, k: 100 } },
-  { label: "White (tinted)", cmyk: { c: 0, m: 0, y: 0, k: 0 }, kind: "white" },
   { label: "Orange", cmyk: { c: 0, m: 50, y: 100, k: 0 } },
   { label: "Green", cmyk: { c: 75, m: 0, y: 100, k: 0 } },
   { label: "Violet", cmyk: { c: 60, m: 70, y: 0, k: 0 } },
@@ -501,6 +520,7 @@ function openColorPopover(anchorEl, plate, onApply) {
     pop.innerHTML = `
       <h3>Color for this plate</h3>
       <div class="pv-big" style="background:${rgbToHex(r, g, b)}"></div>
+      <div class="named-colors" id="pvNamed"></div>
       <div class="wheel-wrap">
         <canvas id="pvWheel" width="120" height="120"></canvas>
         <div style="flex:1;">
@@ -532,19 +552,35 @@ function openColorPopover(anchorEl, plate, onApply) {
       syncSpans(); drawWheel(); applyLive();
     });
 
+    function pickColor(cmyk, kind) {
+      working = { ...cmyk };
+      if (kind) plate.colorKind = kind;
+      pop.querySelector("#sC").value = working.c; pop.querySelector("#sM").value = working.m;
+      pop.querySelector("#sY").value = working.y; pop.querySelector("#sK").value = working.k;
+      syncSpans(); render2(); applyLive();
+    }
+
+    const namedWrap = pop.querySelector("#pvNamed");
+    NAMED_COLORS.forEach(nc => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = nc.label;
+      btn.title = nc.title;
+      const [nr, ng, nb] = cmykToRgb(nc.cmyk.c, nc.cmyk.m, nc.cmyk.y, nc.cmyk.k);
+      btn.style.background = rgbToHex(nr, ng, nb);
+      btn.style.color = (nr * 299 + ng * 587 + nb * 114) / 1000 > 140 ? "#111" : "#fff";
+      btn.style.borderColor = "rgba(0,0,0,.35)";
+      btn.addEventListener("click", () => pickColor(nc.cmyk, nc.kind));
+      namedWrap.appendChild(btn);
+    });
+
     const presetsWrap = pop.querySelector("#pvPresets");
     PRESETS.forEach(p => {
       const sw = document.createElement("div");
       sw.className = "swatch";
       sw.title = p.label;
       sw.style.background = cmykHex(p.cmyk);
-      sw.addEventListener("click", () => {
-        working = { ...p.cmyk };
-        if (p.kind) plate.colorKind = p.kind;
-        pop.querySelector("#sC").value = working.c; pop.querySelector("#sM").value = working.m;
-        pop.querySelector("#sY").value = working.y; pop.querySelector("#sK").value = working.k;
-        syncSpans(); render2(); applyLive();
-      });
+      sw.addEventListener("click", () => pickColor(p.cmyk, p.kind));
       presetsWrap.appendChild(sw);
     });
 
@@ -612,7 +648,14 @@ function openColorPopover(anchorEl, plate, onApply) {
 
   function onWinMove(ev) { if (drag.active && currentPick) currentPick(ev); }
   function onWinUp() { drag.active = false; }
-  function onDocClick(ev) { if (!pop.contains(ev.target) && ev.target !== anchorEl) closePopover(); }
+  function onDocClick(ev) {
+    // a preset/named-color click rebuilds the popover's DOM (innerHTML) synchronously,
+    // so by the time this bubbles up here ev.target may already be detached from pop -
+    // composedPath() captures the path at dispatch time, before that mutation, so it
+    // still correctly shows the click originated inside the popover
+    const path = ev.composedPath ? ev.composedPath() : [ev.target];
+    if (!path.includes(pop) && ev.target !== anchorEl) closePopover();
+  }
   function closePopover() {
     pop.classList.add("hidden");
     window.removeEventListener("mousemove", onWinMove);
@@ -678,7 +721,7 @@ function applySession(data) {
   }
   renderAssignGrid();
   if (!$("screen-viewer").classList.contains("hidden")) {
-    renderLayerList(); renderTogglePills(); recomposite();
+    renderLayerList(); recomposite();
   }
 }
 
@@ -689,11 +732,11 @@ function enterViewer() {
   showScreen("screen-viewer");
   $("viewerJobName").textContent = state.jobName;
   renderLayerList();
-  renderTogglePills();
   state.scale = null; // force a fit on first paint
   state.mirrored = false;
-  $("btnMirror").textContent = "View: Surface (normal)";
+  $("btnMirrorLabel").textContent = "View: Surface (normal)";
   $("btnMirror").classList.remove("active");
+  state.rotation = 0;
   state.rulerMode = false;
   $("btnRuler").classList.remove("active");
   $("canvasStage").classList.remove("ruler-active");
@@ -726,10 +769,16 @@ function renderLayerList() {
       <input type="checkbox" ${plate.visible ? "checked" : ""}>
       <span class="swatch" style="background:${cmykHex(plate.color)}"></span>
       <span class="lname" title="${plate.name}">${plate.name}</span>
+      <button class="solo-btn" title="Solo this plate">◎</button>
     `;
     row.querySelector('input[type="checkbox"]').addEventListener("change", (e) => {
       plate.visible = e.target.checked;
-      renderTogglePills(); recomposite();
+      recomposite();
+    });
+    row.querySelector(".solo-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.plates.forEach(p => p.visible = (p.id === id));
+      renderLayerList(); recomposite();
     });
     row.addEventListener("dragstart", () => row.classList.add("dragging"));
     row.addEventListener("dragend", () => { row.classList.remove("dragging"); persistOrderFromDom(); });
@@ -748,33 +797,11 @@ function renderLayerList() {
 function persistOrderFromDom() {
   const ids = [...$("layerList").children].map(r => r.dataset.id).reverse();
   state.order = ids;
-  renderTogglePills();
   recomposite();
 }
 
-function renderTogglePills() {
-  const wrap = $("togglePills");
-  wrap.innerHTML = "";
-  state.order.forEach(id => {
-    const plate = plateById(id);
-    const pill = document.createElement("div");
-    pill.className = "toggle-pill" + (plate.visible ? "" : " off");
-    pill.title = "Click to toggle · Alt-click to solo this plate";
-    pill.innerHTML = `<span class="dot" style="background:${cmykHex(plate.color)}"></span><span>${plate.name}</span>`;
-    pill.addEventListener("click", (e) => {
-      if (e.altKey) {
-        state.plates.forEach(p => p.visible = (p.id === id));
-      } else {
-        plate.visible = !plate.visible;
-      }
-      renderLayerList(); renderTogglePills(); recomposite();
-    });
-    wrap.appendChild(pill);
-  });
-}
-
-$("allOn").addEventListener("click", () => { state.plates.forEach(p => p.visible = true); renderLayerList(); renderTogglePills(); recomposite(); });
-$("allOff").addEventListener("click", () => { state.plates.forEach(p => p.visible = false); renderLayerList(); renderTogglePills(); recomposite(); });
+$("allOn").addEventListener("click", () => { state.plates.forEach(p => p.visible = true); renderLayerList(); recomposite(); });
+$("allOff").addEventListener("click", () => { state.plates.forEach(p => p.visible = false); renderLayerList(); recomposite(); });
 
 /* ---- compositing ----
    Interactive view is drawn from each plate's capped workLayerCanvas so
@@ -791,15 +818,38 @@ function compositeOnto(ctx, w, h, layerKey) {
   ctx.globalCompositeOperation = "source-over";
 }
 
+// Rotation is baked into the actual canvas pixel content (unlike mirror,
+// which is a live CSS flip) because a 90/270 rotation swaps width/height,
+// which is much simpler to get right as a one-time redraw than as part of
+// the live pan/zoom CSS transform.
+function rotateCanvas(src, degrees) {
+  if (!degrees) return src;
+  const swapped = degrees === 90 || degrees === 270;
+  const out = document.createElement("canvas");
+  out.width = swapped ? src.height : src.width;
+  out.height = swapped ? src.width : src.height;
+  const ctx = out.getContext("2d");
+  ctx.translate(out.width / 2, out.height / 2);
+  ctx.rotate(degrees * Math.PI / 180);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return out;
+}
+
 function recomposite() {
   if (!state.plates.length) return;
   const w = Math.max(...state.plates.map(p => p.workLayerCanvas.width));
   const h = Math.max(...state.plates.map(p => p.workLayerCanvas.height));
+  const tmp = document.createElement("canvas");
+  tmp.width = w; tmp.height = h;
+  compositeOnto(tmp.getContext("2d"), w, h, "workLayerCanvas");
+  const rotated = rotateCanvas(tmp, state.rotation);
   const canvas = $("mainCanvas");
   // resizing a canvas forces a full reallocation+clear even when the value
   // doesn't change, so only touch width/height when the size actually changes
-  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-  compositeOnto(canvas.getContext("2d"), w, h, "workLayerCanvas");
+  if (canvas.width !== rotated.width || canvas.height !== rotated.height) {
+    canvas.width = rotated.width; canvas.height = rotated.height;
+  }
+  canvas.getContext("2d").drawImage(rotated, 0, 0);
   applyTransform();
 }
 
@@ -811,7 +861,8 @@ function buildFullResComposite() {
   const cnv = document.createElement("canvas");
   cnv.width = w; cnv.height = h;
   compositeOnto(cnv.getContext("2d"), w, h, "layerCanvas");
-  return state.mirrored ? mirrorCanvas(cnv) : cnv;
+  const rotated = rotateCanvas(cnv, state.rotation);
+  return state.mirrored ? mirrorCanvas(rotated) : rotated;
 }
 
 function mirrorCanvas(src) {
@@ -822,6 +873,9 @@ function mirrorCanvas(src) {
   ctx.drawImage(src, 0, 0);
   return out;
 }
+
+$("rotateCw").addEventListener("click", () => { state.rotation = (state.rotation + 90) % 360; state.scale = null; recomposite(); });
+$("rotateCcw").addEventListener("click", () => { state.rotation = (state.rotation + 270) % 360; state.scale = null; recomposite(); });
 
 function applyTransform() {
   const canvas = $("mainCanvas");
@@ -847,7 +901,7 @@ $("btnFastPreview").addEventListener("click", () => {
 
 $("btnMirror").addEventListener("click", () => {
   state.mirrored = !state.mirrored;
-  $("btnMirror").textContent = state.mirrored ? "View: Reverse (mirrored)" : "View: Surface (normal)";
+  $("btnMirrorLabel").textContent = state.mirrored ? "View: Reverse (mirrored)" : "View: Surface (normal)";
   $("btnMirror").classList.toggle("active", state.mirrored);
   applyTransform();
   if (!$("compareOverlay").classList.contains("hidden")) drawCompare();
@@ -859,10 +913,30 @@ $("zoomOut").addEventListener("click", () => { state.scale = clamp((state.scale 
 $("zoomFit").addEventListener("click", () => { state.scale = null; applyTransform(); });
 
 const stage = $("canvasStage");
+
+// Screen (stage-relative) -> canvas-local point, undoing pan/zoom/mirror only
+// (not rotation - rotation is baked into the canvas pixels themselves, so
+// canvas-local already includes it).
+function screenToCanvasLocal(sx, sy) {
+  const canvas = $("mainCanvas");
+  const extraX = state.mirrored ? canvas.width * state.scale : 0;
+  const clx = state.mirrored ? (state.panX + extraX - sx) / state.scale : (sx - state.panX) / state.scale;
+  const cly = (sy - state.panY) / state.scale;
+  return { clx, cly };
+}
+
 stage.addEventListener("wheel", (e) => {
   e.preventDefault();
+  const stageRect = stage.getBoundingClientRect();
+  const sx = e.clientX - stageRect.left, sy = e.clientY - stageRect.top;
+  const { clx, cly } = screenToCanvasLocal(sx, sy); // anchor point, before changing scale
   const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
   state.scale = clamp((state.scale || 1) * factor, 0.02, 8);
+  // re-solve pan so (clx,cly) lands back under the cursor at the new scale -
+  // i.e. zoom is centered on the mouse, not on the canvas origin
+  const canvas = $("mainCanvas");
+  state.panX = state.mirrored ? sx + state.scale * (clx - canvas.width) : sx - clx * state.scale;
+  state.panY = sy - cly * state.scale;
   applyTransform();
 }, { passive: false });
 
@@ -884,6 +958,20 @@ window.addEventListener("mouseup", () => {
 });
 window.addEventListener("resize", () => { if (state.scale != null) return; applyTransform(); });
 
+// live cursor-position-in-pixels readout (bottom-left of the canvas)
+stage.addEventListener("mousemove", (e) => {
+  if (!state.plates.length) return;
+  const stageRect = stage.getBoundingClientRect();
+  const sx = e.clientX - stageRect.left, sy = e.clientY - stageRect.top;
+  const canvas = $("mainCanvas");
+  if (sx < 0 || sy < 0 || sx > stageRect.width || sy > stageRect.height) return;
+  const p = screenToFilePixels(e.clientX, e.clientY);
+  const ro = $("pixelReadout");
+  ro.textContent = `X: ${Math.round(p.x)}px  Y: ${Math.round(p.y)}px`;
+  ro.classList.add("visible");
+});
+stage.addEventListener("mouseleave", () => $("pixelReadout").classList.remove("visible"));
+
 /* ---- ruler ---- */
 let rulerDragging = false, rulerP1Screen = null, rulerP1File = null;
 
@@ -895,19 +983,31 @@ $("btnRuler").addEventListener("click", () => {
   if (!state.rulerMode) $("rulerSvg").innerHTML = "";
 });
 
+// undoes the baked-in rotation, mapping a canvas-local point (in the
+// ROTATED canvas's own pixel space) back to the pre-rotation layout, whose
+// aspect ratio matches the original file.
+function unrotateLocal(clx, cly, canvasW, canvasH, rotation) {
+  switch (rotation) {
+    case 90: return { x: canvasH - cly, y: clx };
+    case 180: return { x: canvasW - clx, y: canvasH - cly };
+    case 270: return { x: cly, y: canvasW - clx };
+    default: return { x: clx, y: cly };
+  }
+}
+
 // converts a mouse position into a pixel coordinate in the ORIGINAL file's
-// resolution (undoing pan/zoom/mirror and the interactive-view downscale)
-// so measurements stay correct regardless of the performance-cap scaling.
+// resolution (undoing pan/zoom/mirror/rotation and the interactive-view
+// downscale) so measurements stay correct regardless of view state.
 function screenToFilePixels(clientX, clientY) {
   const stageRect = stage.getBoundingClientRect();
   const canvas = $("mainCanvas");
   const sx = clientX - stageRect.left, sy = clientY - stageRect.top;
-  const extraX = state.mirrored ? canvas.width * state.scale : 0;
-  const clx = state.mirrored ? (state.panX + extraX - sx) / state.scale : (sx - state.panX) / state.scale;
-  const cly = (sy - state.panY) / state.scale;
+  const { clx, cly } = screenToCanvasLocal(sx, sy);
+  const { x: ux, y: uy } = unrotateLocal(clx, cly, canvas.width, canvas.height, state.rotation);
   const ref = state.plates[0];
-  const fileScale = ref ? ref.width / canvas.width : 1;
-  return { x: clx * fileScale, y: cly * fileScale, dpi: ref ? ref.dpi : null };
+  const preRotW = (state.rotation === 90 || state.rotation === 270) ? canvas.height : canvas.width;
+  const fileScale = ref ? ref.width / preRotW : 1;
+  return { x: ux * fileScale, y: uy * fileScale, dpi: ref ? ref.dpi : null };
 }
 
 function rulerMouseDown(e) {
@@ -963,17 +1063,24 @@ function loadChecklistState() {
   if (saved && Array.isArray(saved.items)) {
     state.checklist = saved.items;
     state.operatorName = saved.operator || "";
+    state.vegLogoChecked = !!saved.vegLogoChecked;
   } else {
     state.checklist = DEFAULT_CHECKLIST.map(text => ({ id: uid(), text, checked: false, note: "" }));
+    state.vegLogoChecked = false;
   }
   $("operatorName").value = state.operatorName;
+  $("vegLogoCheck").checked = state.vegLogoChecked;
 }
 
 function saveChecklistState() {
   try {
-    localStorage.setItem(checklistStorageKey(), JSON.stringify({ operator: state.operatorName, items: state.checklist }));
+    localStorage.setItem(checklistStorageKey(), JSON.stringify({
+      operator: state.operatorName, items: state.checklist, vegLogoChecked: state.vegLogoChecked
+    }));
   } catch (e) { /* localStorage unavailable (private browsing, quota) - checklist still works, just won't persist */ }
 }
+
+$("vegLogoCheck").addEventListener("change", (e) => { state.vegLogoChecked = e.target.checked; saveChecklistState(); });
 
 function renderChecklist() {
   const wrap = $("checklistItems");
@@ -1053,8 +1160,8 @@ function buildReportHtml() {
     .summary{display:inline-block;background:#eef5ee;border:1px solid #bcd9bc;border-radius:6px;padding:6px 12px;font-weight:600;}
   </style></head><body>
   <h1>QC Report — ${escapeHtml(state.jobName)}</h1>
-  <div class="meta">Checked by <strong>${escapeHtml(state.operatorName || "—")}</strong> on ${now.toLocaleString()}${state.mirrored ? " · view: Reverse (mirrored)" : " · view: Surface (normal)"}</div>
-  <div class="summary">${done} of ${total} checklist items confirmed</div>
+  <div class="meta">Checked by <strong>${escapeHtml(state.operatorName || "—")}</strong> on ${now.toLocaleString()}${state.mirrored ? " · view: Reverse (mirrored)" : " · view: Surface (normal)"}${state.rotation ? " · rotated " + state.rotation + "°" : ""}</div>
+  <div class="summary">${state.vegLogoChecked ? "✅" : "⬜"} Veg/Non-veg logo &nbsp;·&nbsp; ${done} of ${total} checklist items confirmed</div>
   <h3>Checklist</h3>
   <table>${rows || "<tr><td colspan=3>No checklist items.</td></tr>"}</table>
   <h3>Plates (top of table = top of stack)</h3>
@@ -1106,6 +1213,9 @@ function openCompareWithBytes(bytes) {
   const img = new Image();
   img.onload = () => {
     state.compare.jpegImg = img;
+    state.compare.jpegOffsetX = 0;
+    state.compare.jpegOffsetY = 0;
+    state.compare.jpegScale = 1;
     $("compareOverlay").classList.remove("hidden");
     $("compareSlider").value = 0;
     state.compare.mode = "slider";
@@ -1126,6 +1236,20 @@ function drawMainMirrorAware(ctx, w, h) {
   }
 }
 
+// the TIFF job is usually step-and-repeat (many copies tiled across the
+// plate) but the JPEG proof from the press/customer is usually a single-up
+// shot of one repeat - so the proof needs to be dragged/scaled into place
+// over one repeat before blink/slider comparison means anything.
+function drawJpegLayer(ctx, w, h) {
+  const img = state.compare.jpegImg;
+  if (!img) return;
+  ctx.save();
+  ctx.translate(state.compare.jpegOffsetX, state.compare.jpegOffsetY);
+  ctx.scale(state.compare.jpegScale, state.compare.jpegScale);
+  ctx.drawImage(img, 0, 0, w, h);
+  ctx.restore();
+}
+
 function drawCompare() {
   const canvas = $("compareCanvas");
   const main = $("mainCanvas");
@@ -1136,7 +1260,7 @@ function drawCompare() {
   if (state.compare.mode === "blink") {
     if (state.compare.blinkShowJpeg && img) {
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      drawJpegLayer(ctx, canvas.width, canvas.height);
     } else {
       drawMainMirrorAware(ctx, canvas.width, canvas.height);
     }
@@ -1144,7 +1268,7 @@ function drawCompare() {
     drawMainMirrorAware(ctx, canvas.width, canvas.height);
     if (img) {
       ctx.globalAlpha = (+$("compareSlider").value) / 100;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      drawJpegLayer(ctx, canvas.width, canvas.height);
       ctx.globalAlpha = 1;
     }
   }
@@ -1152,6 +1276,7 @@ function drawCompare() {
 
 $("compareSlider").addEventListener("input", () => { state.compare.mode = "slider"; drawCompare(); });
 $("compareCanvas").addEventListener("click", () => {
+  if (state.compare.positioning) return; // a plain click while positioning is just the end of a drag
   state.compare.mode = "blink";
   state.compare.blinkShowJpeg = !state.compare.blinkShowJpeg;
   drawCompare();
@@ -1165,3 +1290,41 @@ window.addEventListener("keydown", (e) => {
   }
 });
 $("compareClose").addEventListener("click", () => $("compareOverlay").classList.add("hidden"));
+
+$("btnPositionProof").addEventListener("click", () => {
+  state.compare.positioning = !state.compare.positioning;
+  $("btnPositionProof").classList.toggle("active", state.compare.positioning);
+  $("compareCanvas").classList.toggle("positioning", state.compare.positioning);
+});
+$("btnResetProofPosition").addEventListener("click", () => {
+  state.compare.jpegOffsetX = 0; state.compare.jpegOffsetY = 0; state.compare.jpegScale = 1;
+  drawCompare();
+});
+
+let proofDragging = false, proofLastX = 0, proofLastY = 0;
+$("compareCanvas").addEventListener("mousedown", (e) => {
+  if (!state.compare.positioning) return;
+  proofDragging = true;
+  proofLastX = e.clientX; proofLastY = e.clientY;
+});
+window.addEventListener("mousemove", (e) => {
+  if (!proofDragging) return;
+  const dx = e.clientX - proofLastX, dy = e.clientY - proofLastY;
+  // the comparison canvas is shown scaled to fit the window (max-width/height:100%),
+  // so convert screen-pixel drag distance into the canvas's own pixel units
+  const canvas = $("compareCanvas");
+  const rect = canvas.getBoundingClientRect();
+  const k = rect.width ? canvas.width / rect.width : 1;
+  state.compare.jpegOffsetX += dx * k;
+  state.compare.jpegOffsetY += dy * k;
+  proofLastX = e.clientX; proofLastY = e.clientY;
+  drawCompare();
+});
+window.addEventListener("mouseup", () => { proofDragging = false; });
+$("compareCanvas").addEventListener("wheel", (e) => {
+  if (!state.compare.positioning) return;
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.05 : 1 / 1.05;
+  state.compare.jpegScale = clamp(state.compare.jpegScale * factor, 0.05, 20);
+  drawCompare();
+}, { passive: false });

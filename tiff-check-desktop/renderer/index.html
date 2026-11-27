@@ -66,17 +66,27 @@
   </div>
   <div class="viewer-body">
     <div class="layer-panel">
-      <p style="color:#9aa1ab;font-size:11px;margin:4px 2px 8px;">Plate order (drag to resequence — top = printed last / on top)</p>
+      <div class="panel-head">Plates <span class="panel-sub">drag to resequence</span></div>
       <div id="layerList"></div>
     </div>
     <div class="canvas-stage" id="canvasStage">
       <canvas id="mainCanvas"></canvas>
       <svg id="rulerSvg"></svg>
+      <div id="pixelReadout" class="pixel-readout"></div>
     </div>
     <div class="checklist-panel">
       <div class="cl-section">
         <label class="cl-label">Checked by</label>
         <input type="text" id="operatorName" placeholder="Operator name">
+      </div>
+      <div class="cl-section quick-checks">
+        <label class="quick-check">
+          <input type="checkbox" id="vegLogoCheck">
+          <span>Veg / Non-veg logo correct &amp; registered</span>
+        </label>
+        <button id="btnMirror" class="quick-toggle" title="Flip the view to match how you're checking it — reverse-read engraving files vs. a normal-reading proof">
+          <span class="icon">⇄</span><span id="btnMirrorLabel">View: Surface (normal)</span>
+        </button>
       </div>
       <div class="cl-section">
         <div class="cl-row-head">
@@ -94,19 +104,20 @@
   </div>
   <div class="bottom-bar" id="bottomBar">
     <div class="zoom-controls">
-      <button id="zoomOut">−</button>
+      <button id="zoomOut" title="Zoom out">−</button>
       <span id="zoomLabel">100%</span>
-      <button id="zoomIn">+</button>
-      <button id="zoomFit">Fit</button>
+      <button id="zoomIn" title="Zoom in">+</button>
+      <button id="zoomFit" title="Fit to window">Fit</button>
     </div>
-    <button id="btnMirror" title="Flip the view to match how you're checking it — reverse-read engraving files vs. a normal-reading proof">View: Surface (normal)</button>
-    <button id="btnRuler" title="Click-drag on the canvas to measure a distance">Ruler</button>
+    <div class="sep"></div>
+    <button id="rotateCcw" title="Rotate left 90°">⟲</button>
+    <button id="rotateCw" title="Rotate right 90°">⟳</button>
+    <div class="sep"></div>
+    <button id="btnRuler" title="Click-drag on the canvas to measure a distance">⟺ Ruler</button>
     <button id="btnFastPreview" title="Full resolution by default. Turn this on only if toggling colors feels slow on this job — it trades fine detail for speed.">Fast Preview: Off</button>
     <div class="sep"></div>
     <button id="allOn">All on</button>
     <button id="allOff">All off</button>
-    <div class="sep"></div>
-    <div id="togglePills" style="display:flex;gap:6px;overflow-x:auto;"></div>
   </div>
 </section>
 
@@ -114,8 +125,10 @@
 <div id="compareOverlay" class="compare-wrap hidden">
   <div class="ctop">
     <strong>Compare: TIFF composite vs. JPEG proof</strong>
-    <span class="chint">Press <b>Space</b> or click the canvas to blink · drag the slider to wipe/blend</span>
+    <span class="chint">Press <b>Space</b> or click to blink · drag slider to blend</span>
     <span class="spacer"></span>
+    <button id="btnPositionProof" title="Drag the proof to align it with one repeat (your TIFF is step-and-repeat, the proof is usually a single-up); scroll over the proof to scale it">Position Proof</button>
+    <button id="btnResetProofPosition" title="Reset proof position and scale">Reset Position</button>
     <div class="slider-wrap">
       <span style="color:#9aa1ab;font-size:11px;">Composite</span>
       <input type="range" id="compareSlider" min="0" max="100" value="0">
