@@ -1045,7 +1045,11 @@ function switchViewMode(rebuildFn) {
   const stageRect = stage.getBoundingClientRect();
   rebuildFn();
   const canvas = $("mainCanvas");
-  state.scale = clamp(oldScale * (oldCropScale / state.cropScale), 0.02, 400);
+  // keep scale/cropScale (the real on-screen pixel zoom) constant across the
+  // switch - this ratio was previously inverted, which made the view jump to
+  // a wildly different zoom level (and therefore a different-looking patch
+  // of the file) every time panning crossed into/out of/between crop regions
+  state.scale = clamp(oldScale * (state.cropScale / oldCropScale), 0.02, 400);
   state.panX = stageRect.width / 2 - (canvas.width / 2) * state.scale;
   state.panY = stageRect.height / 2 - (canvas.height / 2) * state.scale;
   applyTransform();
@@ -1188,7 +1192,7 @@ function densityAtPoint(fx, fy) {
       const ry = Math.round(fy * p.renderHeight / p.height);
       ink = 255 - p.rgba[(ry * p.renderWidth + rx) * 4];
     }
-    return { name: p.name, percent: Math.round((ink / 255) * 100) };
+    return { name: p.name, percent: Math.round((ink / 255) * 100), colorHex: cmykHex(p.color) };
   }).filter(Boolean);
 }
 
@@ -1197,7 +1201,10 @@ $("btnDensity").addEventListener("click", () => {
   $("btnDensity").classList.toggle("active", state.densityMode);
 });
 
-// live cursor-position-in-pixels (and, in Density mode, per-plate ink %) readout
+// live cursor-position-in-pixels (and, in Density mode, per-plate ink %)
+// readout - shown right next to the cursor (not a fixed corner) so it's
+// never far from what the operator is actually pointing at, and with
+// swatches/high-contrast text so it's readable sitting on top of artwork.
 stage.addEventListener("mousemove", (e) => {
   if (!state.plates.length) return;
   const stageRect = stage.getBoundingClientRect();
@@ -1205,15 +1212,24 @@ stage.addEventListener("mousemove", (e) => {
   if (sx < 0 || sy < 0 || sx > stageRect.width || sy > stageRect.height) return;
   const p = screenToFilePixels(e.clientX, e.clientY);
   const ro = $("pixelReadout");
-  let text = `X: ${Math.round(p.x)}px  Y: ${Math.round(p.y)}px`;
+  let html = `<div class="pr-coord">X: ${Math.round(p.x)}px &nbsp; Y: ${Math.round(p.y)}px</div>`;
+  let rowCount = 0;
   if (state.densityMode) {
     const rows = densityAtPoint(p.x, p.y);
     const total = rows.reduce((sum, r) => sum + (r.percent || 0), 0);
-    text += "\n" + rows.map(r => `${r.name}: ${r.percent == null ? "—" : r.percent + "%"}`).join("\n");
-    text += `\nTotal: ${total}%`;
+    rowCount = rows.length + 1;
+    html += rows.map(r => `<div class="pr-row"><span class="pr-swatch" style="background:${r.colorHex}"></span>${escapeHtml(r.name)}<b>${r.percent == null ? "—" : r.percent + "%"}</b></div>`).join("");
+    html += `<div class="pr-row pr-total">Total<b>${total}%</b></div>`;
   }
-  ro.textContent = text;
+  ro.innerHTML = html;
   ro.classList.add("visible");
+  // position just below-right of the cursor, flipping to stay on-screen
+  const OFFSET = 16, w = 220, h = 22 + rowCount * 19;
+  let left = sx + OFFSET, top = sy + OFFSET;
+  if (left + w > stageRect.width) left = sx - OFFSET - w;
+  if (top + h > stageRect.height) top = sy - OFFSET - h;
+  ro.style.left = Math.max(4, left) + "px";
+  ro.style.top = Math.max(4, top) + "px";
 });
 stage.addEventListener("mouseleave", () => $("pixelReadout").classList.remove("visible"));
 

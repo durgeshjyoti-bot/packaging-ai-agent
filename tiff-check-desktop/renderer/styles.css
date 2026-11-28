@@ -191,12 +191,24 @@ input[type="text"], input[type="number"] {
 #rulerSvg circle { fill: #ff5050; }
 #rulerSvg text { fill: #fff; font: 12px sans-serif; paint-order: stroke; stroke: #000; stroke-width: 3px; }
 .pixel-readout {
-  position: absolute; left: 10px; bottom: 10px; z-index: 5;
-  background: rgba(23,25,29,.9); border: 1px solid var(--border); border-radius: 4px;
-  padding: 5px 9px; font: 11px/1.5 ui-monospace, "SF Mono", Consolas, monospace; color: var(--text-dim);
-  pointer-events: none; display: none; white-space: pre-line;
+  position: absolute; left: 10px; top: 10px; z-index: 5; min-width: 150px;
+  background: rgba(14,15,18,.94); border: 1px solid #555d68; border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.45);
+  padding: 7px 10px; font: 12px/1.5 ui-monospace, "SF Mono", Consolas, monospace; color: var(--text);
+  pointer-events: none; display: none;
 }
 .pixel-readout.visible { display: block; }
+.pixel-readout .pr-coord { color: var(--text-dim); margin-bottom: 3px; white-space: nowrap; }
+.pixel-readout .pr-row {
+  display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  padding: 1px 0;
+}
+.pixel-readout .pr-row b { margin-left: auto; padding-left: 10px; font-weight: 700; color: #fff; }
+.pixel-readout .pr-swatch {
+  width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,.35);
+}
+.pixel-readout .pr-total { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 4px; font-weight: 700; }
 
 .checklist-panel {
   width: 270px; flex: 0 0 auto; background: var(--panel); border-left: 1px solid var(--border);
