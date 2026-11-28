@@ -178,7 +178,8 @@ input[type="text"], input[type="number"] {
   flex: 1; position: relative; overflow: hidden; background:
     repeating-conic-gradient(#272a2e 0% 25%, #202327 0% 50%) 0 0/20px 20px;
 }
-.canvas-stage canvas { position: absolute; cursor: grab; image-rendering: -webkit-optimize-contrast; }
+.canvas-stage canvas { position: absolute; cursor: grab; }
+.canvas-stage canvas.pixelated { image-rendering: pixelated; image-rendering: -moz-crisp-edges; image-rendering: crisp-edges; }
 .canvas-stage canvas.grabbing { cursor: grabbing; }
 .canvas-stage.ruler-active canvas { cursor: crosshair; }
 #rulerSvg {

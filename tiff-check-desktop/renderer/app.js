@@ -23,7 +23,16 @@ const state = {
   operatorName: "",
   vegLogoChecked: false,
   densityMode: false,
-  fastPreview: false // opt-in only: full resolution is the default so fine detail (barcodes, small text, trapping) is never silently blurred
+  fastPreview: false, // opt-in only: full resolution is the default so fine detail (barcodes, small text, trapping) is never silently blurred
+  // Deep-zoom crop mode (see evaluateCropMode()): for a plate too large for a
+  // single safe canvas, mainCanvas normally holds the whole (downsampled)
+  // composite. Zoomed in far enough, it instead holds a true full-resolution
+  // crop of just the visible region, re-centered here as the new origin.
+  cropMode: false,
+  cropOrigin: { x: 0, y: 0 },
+  cropScale: 1, // real file pixels per mainCanvas pixel (whole-file mode recomputes this each build)
+  cropBounds: null, // {x0,y0,x1,y1} the current crop covers, in real file pixels
+  hasCappedPlates: false
 };
 
 const FALLBACK_PALETTE = ["#808080", "#ff8c00", "#8a2be2", "#8b4513", "#20b2aa", "#dc143c", "#2e8b57", "#4169e1"];
@@ -243,6 +252,7 @@ async function finalizePlateSelection(headerList) {
 
   state.plates = [];
   state.fallbackIdx = 0;
+  state.hasCappedPlates = false; // decodePlate() sets this back to true per-plate as needed
   let i = 0;
   for (const h of headerList) {
     i++;
@@ -273,6 +283,15 @@ async function decodePlate(h, refSize) {
   // actually build a canvas at, which CANVAS_SAFE_DIM may reduce for an extreme file.
   const render = computeRenderDims(w, h_);
   const rgba = render.capped ? downsampleRGBA(rawRgba, w, h_, render.w, render.h) : rawRgba;
+  // When capped, also keep the TRUE full-resolution data (compact single-channel
+  // for an ink plate, since that's all buildLayerCanvas needs) so deep zoom can
+  // rebuild just the visible region at real pixel fidelity - see evaluateCropMode().
+  let fullGray = null, fullRgba = null;
+  if (render.capped) {
+    if (isComposite) fullRgba = rawRgba;
+    else fullGray = extractGrayChannel(rawRgba, w, h_);
+    state.hasCappedPlates = true;
+  }
 
   const nameNoExt = h.name.replace(/\.[^.]+$/, "");
   const guess = guessColorFromName(nameNoExt);
@@ -296,6 +315,7 @@ async function decodePlate(h, refSize) {
     mismatch: (w + "x" + h_) !== refSize,
     isComposite,
     rgba,                 // raw decoded RGBA at render size (used directly for composite TIFFs)
+    fullGray, fullRgba,    // present only when safetyCapped - true native-resolution source data
     color: cmyk,
     colorKind: kind,      // "normal" | "white" | "varnish" | "unassigned"
     visible: true,
@@ -316,6 +336,15 @@ function computeRenderDims(w, h) {
 
 // Plain nearest-neighbor downsample on the typed array itself (no canvas involved,
 // so it isn't subject to the same canvas-area ceiling this is working around).
+// Pulls just the R channel (R=G=B for grayscale after toRGBA8 normalization)
+// into a compact 1-byte-per-pixel array - a quarter the size of the full RGBA,
+// which matters when this is the only copy of a huge plate's true resolution.
+function extractGrayChannel(rgba, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let p = 0, n = w * h; p < n; p++) out[p] = rgba[p * 4];
+  return out;
+}
+
 // Area-averages each destination pixel over its full block of source pixels
 // (a box filter), not nearest-neighbor. This matters beyond just display
 // quality: ink "density" at a halftone screen is inherently a local-area
@@ -752,8 +781,13 @@ function enterViewer() {
   state.plates.forEach(refreshWorkCanvas);
   state.densityMode = false;
   $("btnDensity").classList.remove("active");
+  state.cropMode = false;
+  state.cropBounds = null;
+  state.cropOrigin = { x: 0, y: 0 };
+  state.cropScale = 1;
   loadChecklistState();
   recomposite();
+  scheduleCropEvaluation();
 }
 $("btnBackToAssign").addEventListener("click", () => showScreen("screen-assign"));
 
@@ -841,14 +875,36 @@ function rotateCanvas(src, degrees) {
   return out;
 }
 
+// Redraws mainCanvas with whatever is currently visible/ordered/colored,
+// without changing pan/zoom or which mode (whole-file vs. deep-zoom crop) is
+// active - every existing toggle/reorder/recolor hook just calls this.
 function recomposite() {
   if (!state.plates.length) return;
+  if (state.cropMode) {
+    rebuildCropContent(state.cropBounds.x0, state.cropBounds.y0, state.cropBounds.x1, state.cropBounds.y1);
+  } else {
+    rebuildWholeFileContent();
+  }
+  applyTransform();
+}
+
+// Builds the whole-file (capped-resolution) composite as a standalone
+// canvas, without touching mainCanvas or any view state - used both to
+// paint mainCanvas in whole-file mode and, on demand, by Compare-with-JPEG
+// when the live view happens to be in deep-zoom crop mode (the comparison
+// should always be against the whole job, not whatever sub-region is
+// currently on screen).
+function buildWholeFileComposite() {
   const w = Math.max(...state.plates.map(p => p.workLayerCanvas.width));
   const h = Math.max(...state.plates.map(p => p.workLayerCanvas.height));
   const tmp = document.createElement("canvas");
   tmp.width = w; tmp.height = h;
   compositeOnto(tmp.getContext("2d"), w, h, "workLayerCanvas");
-  const rotated = rotateCanvas(tmp, state.rotation);
+  return { canvas: rotateCanvas(tmp, state.rotation), preRotW: w };
+}
+
+function rebuildWholeFileContent() {
+  const { canvas: rotated, preRotW } = buildWholeFileComposite();
   const canvas = $("mainCanvas");
   // resizing a canvas forces a full reallocation+clear even when the value
   // doesn't change, so only touch width/height when the size actually changes
@@ -856,6 +912,142 @@ function recomposite() {
     canvas.width = rotated.width; canvas.height = rotated.height;
   }
   canvas.getContext("2d").drawImage(rotated, 0, 0);
+  const ref = state.plates[0];
+  state.cropMode = false;
+  state.cropBounds = null;
+  state.cropOrigin = { x: 0, y: 0 };
+  state.cropScale = ref ? ref.width / preRotW : 1;
+}
+
+// Builds mainCanvas from the TRUE full-resolution source data for just the
+// [x0,x1)x[y0,y1) region (real file pixels) - this is what lets a file too
+// large for one safe canvas still be inspected pixel-for-pixel once zoomed
+// in close enough that the region itself fits safely.
+function rebuildCropContent(x0, y0, x1, y1) {
+  const cw = x1 - x0, ch = y1 - y0;
+  const tmp = document.createElement("canvas");
+  tmp.width = cw; tmp.height = ch;
+  const ctx = tmp.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, cw, ch);
+  state.order.forEach(id => {
+    const plate = plateById(id);
+    if (!plate.visible) return;
+    ctx.globalCompositeOperation = plate.isComposite ? "source-over" : "multiply";
+    ctx.drawImage(getPlateCropCanvas(plate, x0, y0, cw, ch), 0, 0);
+  });
+  ctx.globalCompositeOperation = "source-over";
+  const rotated = rotateCanvas(tmp, state.rotation);
+  const canvas = $("mainCanvas");
+  canvas.width = rotated.width; canvas.height = rotated.height;
+  canvas.getContext("2d").drawImage(rotated, 0, 0);
+  state.cropMode = true;
+  state.cropOrigin = { x: x0, y: y0 };
+  state.cropScale = 1; // a crop is always built at true 1:1 native resolution
+  state.cropBounds = { x0, y0, x1, y1 };
+}
+
+// Returns a tinted canvas covering exactly [x0,x0+cw)x[y0,y0+ch) of one
+// plate, at true native resolution. For a plate that was never downsampled,
+// its existing layerCanvas already IS native resolution, so this is just a
+// cheap crop; only a safety-capped plate needs re-tinting from the retained
+// full-resolution source for this region.
+function getPlateCropCanvas(plate, x0, y0, cw, ch) {
+  const out = document.createElement("canvas");
+  out.width = cw; out.height = ch;
+  const octx = out.getContext("2d");
+  if (!plate.safetyCapped) {
+    octx.drawImage(plate.layerCanvas, x0, y0, cw, ch, 0, 0, cw, ch);
+    return out;
+  }
+  const srcW = plate.width, srcH = plate.height;
+  if (plate.isComposite) {
+    const imgData = octx.createImageData(cw, ch);
+    for (let y = 0; y < ch; y++) {
+      const sy = y0 + y; if (sy < 0 || sy >= srcH) continue;
+      const srcRow = sy * srcW;
+      for (let x = 0; x < cw; x++) {
+        const sx = x0 + x; if (sx < 0 || sx >= srcW) continue;
+        const so = (srcRow + sx) * 4, dOff = (y * cw + x) * 4;
+        imgData.data[dOff] = plate.fullRgba[so]; imgData.data[dOff + 1] = plate.fullRgba[so + 1];
+        imgData.data[dOff + 2] = plate.fullRgba[so + 2]; imgData.data[dOff + 3] = plate.fullRgba[so + 3];
+      }
+    }
+    octx.putImageData(imgData, 0, 0);
+    return out;
+  }
+  let [r, g, b] = cmykToRgb(plate.color.c, plate.color.m, plate.color.y, plate.color.k);
+  if (plate.colorKind === "white" && r > 245 && g > 245 && b > 245) [r, g, b] = [130, 190, 255];
+  const imgData = octx.createImageData(cw, ch);
+  for (let y = 0; y < ch; y++) {
+    const sy = y0 + y; if (sy < 0 || sy >= srcH) continue;
+    const srcRow = sy * srcW;
+    for (let x = 0; x < cw; x++) {
+      const sx = x0 + x; if (sx < 0 || sx >= srcW) continue;
+      const ink = 255 - plate.fullGray[srcRow + sx];
+      const dOff = (y * cw + x) * 4;
+      imgData.data[dOff] = r; imgData.data[dOff + 1] = g; imgData.data[dOff + 2] = b; imgData.data[dOff + 3] = ink;
+    }
+  }
+  octx.putImageData(imgData, 0, 0);
+  return out;
+}
+
+/* ---- deep-zoom crop mode: decide when to switch, keeping the view visually
+   stable across the switch (same screen position, same apparent zoom) ---- */
+let cropEvalTimer = null;
+function scheduleCropEvaluation() {
+  if (!state.hasCappedPlates) return;
+  clearTimeout(cropEvalTimer);
+  cropEvalTimer = setTimeout(evaluateCropMode, 180);
+}
+
+function currentViewportFileBounds() {
+  const stageRect = stage.getBoundingClientRect();
+  const corners = [[0, 0], [stageRect.width, 0], [0, stageRect.height], [stageRect.width, stageRect.height]]
+    .map(([sx, sy]) => screenToFilePixels(stageRect.left + sx, stageRect.top + sy));
+  const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+}
+
+function evaluateCropMode() {
+  if (!state.hasCappedPlates || !state.plates.length) return;
+  const vb = currentViewportFileBounds();
+  const viewW = vb.x1 - vb.x0, viewH = vb.y1 - vb.y0;
+  const threshold = CANVAS_SAFE_DIM / 2.2; // leaves room for the margin below to still fit safely
+  const wantsCrop = Math.max(viewW, viewH) < threshold;
+
+  if (!wantsCrop) {
+    if (state.cropMode) switchViewMode(rebuildWholeFileContent);
+    return;
+  }
+  if (state.cropMode) {
+    const inside = vb.x0 >= state.cropBounds.x0 && vb.x1 <= state.cropBounds.x1 &&
+      vb.y0 >= state.cropBounds.y0 && vb.y1 <= state.cropBounds.y1;
+    if (inside) return; // current crop already safely covers the view
+  }
+  const ref = state.plates[0];
+  const cx = (vb.x0 + vb.x1) / 2, cy = (vb.y0 + vb.y1) / 2;
+  const MARGIN = 2; // build bigger than the viewport so minor panning doesn't immediately re-trigger
+  const halfW = Math.min(Math.max(viewW, 20) * MARGIN / 2, CANVAS_SAFE_DIM / 2);
+  const halfH = Math.min(Math.max(viewH, 20) * MARGIN / 2, CANVAS_SAFE_DIM / 2);
+  const x0 = Math.max(0, Math.round(cx - halfW)), x1 = Math.min(ref.width, Math.round(cx + halfW));
+  const y0 = Math.max(0, Math.round(cy - halfH)), y1 = Math.min(ref.height, Math.round(cy + halfH));
+  if (x1 - x0 < 2 || y1 - y0 < 2) return;
+  switchViewMode(() => rebuildCropContent(x0, y0, x1, y1));
+}
+
+// Runs a content rebuild that changes mainCanvas's own size/meaning (entering
+// or leaving crop mode, or re-centering the crop), then restores the same
+// apparent zoom level and screen position so the switch itself is invisible.
+function switchViewMode(rebuildFn) {
+  const oldScale = state.scale, oldCropScale = state.cropScale;
+  const stageRect = stage.getBoundingClientRect();
+  rebuildFn();
+  const canvas = $("mainCanvas");
+  state.scale = clamp(oldScale * (oldCropScale / state.cropScale), 0.02, 400);
+  state.panX = stageRect.width / 2 - (canvas.width / 2) * state.scale;
+  state.panY = stageRect.height / 2 - (canvas.height / 2) * state.scale;
   applyTransform();
 }
 
@@ -880,8 +1072,8 @@ function mirrorCanvas(src) {
   return out;
 }
 
-$("rotateCw").addEventListener("click", () => { state.rotation = (state.rotation + 90) % 360; state.scale = null; recomposite(); });
-$("rotateCcw").addEventListener("click", () => { state.rotation = (state.rotation + 270) % 360; state.scale = null; recomposite(); });
+$("rotateCw").addEventListener("click", () => { state.rotation = (state.rotation + 90) % 360; state.scale = null; recomposite(); scheduleCropEvaluation(); });
+$("rotateCcw").addEventListener("click", () => { state.rotation = (state.rotation + 270) % 360; state.scale = null; recomposite(); scheduleCropEvaluation(); });
 
 function applyTransform() {
   const canvas = $("mainCanvas");
@@ -897,6 +1089,10 @@ function applyTransform() {
   canvas.style.transform = `translate(${state.panX + extraX}px, ${state.panY}px) scale(${sx}, ${state.scale})`;
   canvas.style.transformOrigin = "0 0";
   $("zoomLabel").textContent = Math.round(state.scale * 100) + "%";
+  // past real-pixel size, show crisp hard edges instead of smoothed/blurred
+  // interpolation - "100%" here means exactly 1 screen px per real file px
+  const realPixelZoom = state.scale / state.cropScale;
+  canvas.classList.toggle("pixelated", realPixelZoom > 1.2);
 }
 
 $("btnFastPreview").addEventListener("click", () => {
@@ -914,9 +1110,14 @@ $("btnMirror").addEventListener("click", () => {
 });
 
 /* ---- zoom / pan ---- */
-$("zoomIn").addEventListener("click", () => { state.scale = clamp((state.scale || 1) * 1.25, 0.02, 8); applyTransform(); });
-$("zoomOut").addEventListener("click", () => { state.scale = clamp((state.scale || 1) / 1.25, 0.02, 8); applyTransform(); });
-$("zoomFit").addEventListener("click", () => { state.scale = null; applyTransform(); });
+// Clamp range is wide enough to cover both whole-file mode (where 100% is
+// relative to a downsampled canvas) and deep-zoom crop mode (where 100% is
+// exactly 1 screen px per real file px) without the two disagreeing at the
+// moment they switch.
+const MAX_SCALE = 400;
+$("zoomIn").addEventListener("click", () => { state.scale = clamp((state.scale || 1) * 1.25, 0.02, MAX_SCALE); applyTransform(); scheduleCropEvaluation(); });
+$("zoomOut").addEventListener("click", () => { state.scale = clamp((state.scale || 1) / 1.25, 0.02, MAX_SCALE); applyTransform(); scheduleCropEvaluation(); });
+$("zoomFit").addEventListener("click", () => { state.scale = null; applyTransform(); scheduleCropEvaluation(); });
 
 const stage = $("canvasStage");
 
@@ -937,13 +1138,14 @@ stage.addEventListener("wheel", (e) => {
   const sx = e.clientX - stageRect.left, sy = e.clientY - stageRect.top;
   const { clx, cly } = screenToCanvasLocal(sx, sy); // anchor point, before changing scale
   const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-  state.scale = clamp((state.scale || 1) * factor, 0.02, 8);
+  state.scale = clamp((state.scale || 1) * factor, 0.02, MAX_SCALE);
   // re-solve pan so (clx,cly) lands back under the cursor at the new scale -
   // i.e. zoom is centered on the mouse, not on the canvas origin
   const canvas = $("mainCanvas");
   state.panX = state.mirrored ? sx + state.scale * (clx - canvas.width) : sx - clx * state.scale;
   state.panY = sy - cly * state.scale;
   applyTransform();
+  scheduleCropEvaluation();
 }, { passive: false });
 
 let panning = false, lastX = 0, lastY = 0;
@@ -957,6 +1159,7 @@ window.addEventListener("mousemove", (e) => {
   state.panX += e.clientX - lastX; state.panY += e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   applyTransform();
+  scheduleCropEvaluation();
 });
 window.addEventListener("mouseup", () => {
   rulerDragging = false;
@@ -972,13 +1175,19 @@ function densityAtPoint(fx, fy) {
   return [...state.order].reverse().map(id => {
     const p = plateById(id);
     if (p.isComposite) return null;
-    const rx = Math.round(fx * p.renderWidth / p.width);
-    const ry = Math.round(fy * p.renderHeight / p.height);
-    if (rx < 0 || ry < 0 || rx >= p.renderWidth || ry >= p.renderHeight) {
+    const fxi = Math.round(fx), fyi = Math.round(fy);
+    if (fxi < 0 || fyi < 0 || fxi >= p.width || fyi >= p.height) {
       return { name: p.name, percent: null };
     }
-    const idx = (ry * p.renderWidth + rx) * 4;
-    const ink = 255 - p.rgba[idx];
+    let ink;
+    if (p.fullGray) {
+      // true native pixel - exact, not an area average
+      ink = 255 - p.fullGray[fyi * p.width + fxi];
+    } else {
+      const rx = Math.round(fx * p.renderWidth / p.width);
+      const ry = Math.round(fy * p.renderHeight / p.height);
+      ink = 255 - p.rgba[(ry * p.renderWidth + rx) * 4];
+    }
     return { name: p.name, percent: Math.round((ink / 255) * 100) };
   }).filter(Boolean);
 }
@@ -1041,9 +1250,11 @@ function screenToFilePixels(clientX, clientY) {
   const { clx, cly } = screenToCanvasLocal(sx, sy);
   const { x: ux, y: uy } = unrotateLocal(clx, cly, canvas.width, canvas.height, state.rotation);
   const ref = state.plates[0];
-  const preRotW = (state.rotation === 90 || state.rotation === 270) ? canvas.height : canvas.width;
-  const fileScale = ref ? ref.width / preRotW : 1;
-  return { x: ux * fileScale, y: uy * fileScale, dpi: ref ? ref.dpi : null };
+  return {
+    x: state.cropOrigin.x + ux * state.cropScale,
+    y: state.cropOrigin.y + uy * state.cropScale,
+    dpi: ref ? ref.dpi : null
+  };
 }
 
 function rulerMouseDown(e) {
@@ -1266,15 +1477,14 @@ function openCompareWithBytes(bytes) {
   img.src = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
 }
 
-function drawMainMirrorAware(ctx, w, h) {
-  const main = $("mainCanvas");
+function drawMainMirrorAware(ctx, w, h, sourceCanvas) {
   if (state.mirrored) {
     ctx.save();
     ctx.translate(w, 0); ctx.scale(-1, 1);
-    ctx.drawImage(main, 0, 0, w, h);
+    ctx.drawImage(sourceCanvas, 0, 0, w, h);
     ctx.restore();
   } else {
-    ctx.drawImage(main, 0, 0, w, h);
+    ctx.drawImage(sourceCanvas, 0, 0, w, h);
   }
 }
 
@@ -1298,7 +1508,9 @@ function drawJpegLayer(ctx) {
 
 function drawCompare() {
   const canvas = $("compareCanvas");
-  const main = $("mainCanvas");
+  // the comparison is always against the whole job, never just whatever
+  // sub-region deep-zoom crop mode happens to have on screen right now
+  const main = state.cropMode ? buildWholeFileComposite().canvas : $("mainCanvas");
   canvas.width = main.width; canvas.height = main.height;
   const ctx = canvas.getContext("2d");
   const img = state.compare.jpegImg;
@@ -1308,10 +1520,10 @@ function drawCompare() {
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       drawJpegLayer(ctx);
     } else {
-      drawMainMirrorAware(ctx, canvas.width, canvas.height);
+      drawMainMirrorAware(ctx, canvas.width, canvas.height, main);
     }
   } else {
-    drawMainMirrorAware(ctx, canvas.width, canvas.height);
+    drawMainMirrorAware(ctx, canvas.width, canvas.height, main);
     if (img) {
       ctx.globalAlpha = (+$("compareSlider").value) / 100;
       drawJpegLayer(ctx);
