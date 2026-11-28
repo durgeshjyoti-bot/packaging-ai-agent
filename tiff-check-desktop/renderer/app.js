@@ -550,8 +550,10 @@ function openColorPopover(anchorEl, plate, onApply) {
     const [r, g, b] = rgbNow();
     pop.innerHTML = `
       <h3>Color for this plate</h3>
-      <div class="pv-big" style="background:${rgbToHex(r, g, b)}"></div>
+      <div class="pv-big" style="background:${rgbToHex(r, g, b)}"><span class="pv-hex">${rgbToHex(r, g, b).toUpperCase()}</span></div>
+      <div class="pv-section-label">Quick picks</div>
       <div class="named-colors" id="pvNamed"></div>
+      <div class="pv-section-label">Hue &amp; saturation</div>
       <div class="wheel-wrap">
         <canvas id="pvWheel" width="120" height="120"></canvas>
         <div style="flex:1;">
@@ -559,10 +561,12 @@ function openColorPopover(anchorEl, plate, onApply) {
           <div class="meta" style="color:#9aa1ab;">Click the wheel for hue/saturation</div>
         </div>
       </div>
+      <div class="pv-section-label">CMYK</div>
       <div class="cmyk-row"><label>C</label><input type="range" id="sC" min="0" max="100" value="${working.c}"><span>${working.c}</span></div>
       <div class="cmyk-row"><label>M</label><input type="range" id="sM" min="0" max="100" value="${working.m}"><span>${working.m}</span></div>
       <div class="cmyk-row"><label>Y</label><input type="range" id="sY" min="0" max="100" value="${working.y}"><span>${working.y}</span></div>
       <div class="cmyk-row"><label>K</label><input type="range" id="sK" min="0" max="100" value="${working.k}"><span>${working.k}</span></div>
+      <div class="pv-section-label">Presets</div>
       <div class="presets" id="pvPresets"></div>
       <div class="close-row"><button id="pvClose" class="primary">Done</button></div>
     `;
@@ -673,7 +677,9 @@ function openColorPopover(anchorEl, plate, onApply) {
   function applyLive() {
     plate.color = { ...working };
     if (plate.colorKind === "unassigned") plate.colorKind = "normal";
-    pop.querySelector(".pv-big").style.background = rgbToHex(...rgbNow());
+    const hex = rgbToHex(...rgbNow());
+    pop.querySelector(".pv-big").style.background = hex;
+    pop.querySelector(".pv-hex").textContent = hex.toUpperCase();
     onApply();
   }
 
@@ -1175,16 +1181,32 @@ window.addEventListener("resize", () => { if (state.scale != null) return; apply
 // read straight from that plate's own decoded grayscale data (not from the
 // rendered/tinted composite), so it's the real ink percentage, not a color
 // guess from an RGB sample.
+//
+// At a real native pixel (realPixelZoom >= 1, i.e. zoomed in to 1:1 or
+// closer - always true in deep-zoom crop mode), this reads the exact single
+// pixel, which is what you want for verifying dot edges/trapping. But when
+// zoomed OUT (common on a huge job before zooming in on a specific spot),
+// one screen pixel already represents many real file pixels, averaged
+// together for display - reading a single exact pixel there doesn't match
+// what's visually on screen at all, and can look like noise, especially on
+// a halftoned/textured area, since it reports whichever one native pixel
+// happened to land under the cursor rather than what the eye is seeing.
+// Averaging over that same neighborhood keeps the reading consistent with
+// the visible color at every zoom level.
 function densityAtPoint(fx, fy) {
+  const realPixelZoom = state.scale / state.cropScale;
+  const boxRadius = realPixelZoom >= 1 ? 0 : Math.min(24, Math.round(0.5 / realPixelZoom));
   return [...state.order].reverse().map(id => {
     const p = plateById(id);
     if (p.isComposite) return null;
     const fxi = Math.round(fx), fyi = Math.round(fy);
     if (fxi < 0 || fyi < 0 || fxi >= p.width || fyi >= p.height) {
-      return { name: p.name, percent: null };
+      return { name: p.name, percent: null, colorHex: cmykHex(p.color) };
     }
     let ink;
-    if (p.fullGray) {
+    if (boxRadius > 0) {
+      ink = averageInkInBox(p, fxi, fyi, boxRadius);
+    } else if (p.fullGray) {
       // true native pixel - exact, not an area average
       ink = 255 - p.fullGray[fyi * p.width + fxi];
     } else {
@@ -1196,9 +1218,35 @@ function densityAtPoint(fx, fy) {
   }).filter(Boolean);
 }
 
+function averageInkInBox(plate, cx, cy, radius) {
+  const x0 = Math.max(0, cx - radius), x1 = Math.min(plate.width - 1, cx + radius);
+  const y0 = Math.max(0, cy - radius), y1 = Math.min(plate.height - 1, cy + radius);
+  let sum = 0, count = 0;
+  if (plate.fullGray) {
+    const src = plate.fullGray, w = plate.width;
+    for (let y = y0; y <= y1; y++) {
+      const row = y * w;
+      for (let x = x0; x <= x1; x++) { sum += 255 - src[row + x]; count++; }
+    }
+  } else {
+    const src = plate.rgba, rw = plate.renderWidth, rh = plate.renderHeight, w = plate.width, h = plate.height;
+    for (let y = y0; y <= y1; y++) {
+      const ry = Math.round(y * rh / h);
+      for (let x = x0; x <= x1; x++) {
+        const rx = Math.round(x * rw / w);
+        sum += 255 - src[(ry * rw + rx) * 4];
+        count++;
+      }
+    }
+  }
+  return count ? sum / count : 0;
+}
+
 $("btnDensity").addEventListener("click", () => {
   state.densityMode = !state.densityMode;
   $("btnDensity").classList.toggle("active", state.densityMode);
+  $("canvasStage").classList.toggle("density-active", state.densityMode);
+  if (!state.densityMode) $("densityMarker").classList.remove("visible");
 });
 
 // live cursor-position-in-pixels (and, in Density mode, per-plate ink %)
@@ -1230,8 +1278,19 @@ stage.addEventListener("mousemove", (e) => {
   if (top + h > stageRect.height) top = sy - OFFSET - h;
   ro.style.left = Math.max(4, left) + "px";
   ro.style.top = Math.max(4, top) + "px";
+  // the real mouse cursor is hidden in density mode (replaced by this ring)
+  // so there's never any doubt about which exact pixel is being sampled
+  if (state.densityMode) {
+    const marker = $("densityMarker");
+    marker.style.left = sx + "px";
+    marker.style.top = sy + "px";
+    marker.classList.add("visible");
+  }
 });
-stage.addEventListener("mouseleave", () => $("pixelReadout").classList.remove("visible"));
+stage.addEventListener("mouseleave", () => {
+  $("pixelReadout").classList.remove("visible");
+  $("densityMarker").classList.remove("visible");
+});
 
 /* ---- ruler ---- */
 let rulerDragging = false, rulerP1Screen = null, rulerP1File = null;
@@ -1606,6 +1665,22 @@ $("proofDpi").addEventListener("input", recomputeProofScale);
 $("btnResetProofPosition").addEventListener("click", () => {
   state.compare.jpegOffsetX = 0; state.compare.jpegOffsetY = 0;
   recomputeProofScale();
+});
+
+// DPI-based scaling needs a correct dpi on both sides - when that's not
+// available/trustworthy, this is a simple fallback that just scales the
+// proof to fit inside the same window as the composite (not physically
+// accurate, but gets it roughly the right size to align by eye, then
+// Position Proof can nudge/scale it further from there).
+$("btnFitProof").addEventListener("click", () => {
+  const img = state.compare.jpegImg;
+  const canvas = $("compareCanvas");
+  if (!img || !canvas.width) return;
+  const fitScale = Math.min(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+  state.compare.jpegScale = fitScale;
+  state.compare.jpegOffsetX = (canvas.width - img.naturalWidth * fitScale) / 2;
+  state.compare.jpegOffsetY = (canvas.height - img.naturalHeight * fitScale) / 2;
+  drawCompare();
 });
 
 let proofDragging = false, proofLastX = 0, proofLastY = 0;

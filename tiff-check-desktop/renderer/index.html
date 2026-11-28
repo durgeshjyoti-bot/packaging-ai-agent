@@ -15,6 +15,10 @@
     <span class="sub">manual separation check vs. print / proof</span>
   </div>
   <div class="load-wrap">
+    <div class="brand-mark">
+      <img src="assets/prepress-monk-logo.jpg" alt="Prepress Monk">
+      <span>A Prepress Tool From <strong>Prepress Monk</strong></span>
+    </div>
     <div class="drop" id="dropZone">
       <p style="color:#e7e9ec;margin:0 0 10px;font-size:15px;">Select the job folder</p>
       <p>Pick the folder that holds the separated TIFF plates (and, if you have one, the prepress JPEG proof). Everything stays on this computer — nothing is uploaded.</p>
@@ -72,6 +76,7 @@
     <div class="canvas-stage" id="canvasStage">
       <canvas id="mainCanvas"></canvas>
       <svg id="rulerSvg"></svg>
+      <div id="densityMarker" class="density-marker"></div>
       <div id="pixelReadout" class="pixel-readout"></div>
     </div>
     <div class="checklist-panel">
@@ -121,6 +126,7 @@
     <button id="btnAutoBlink" title="Automatically alternate composite/JPEG on its own, one at a time, so you don't have to keep clicking">▶ Auto Blink</button>
     <button id="btnPositionProof" title="Drag the proof to align it with one repeat (your TIFF is step-and-repeat, the proof is usually a single-up); scroll over the proof to scale it">Position Proof</button>
     <button id="btnResetProofPosition" title="Reset proof position, and rescale it using the DPI values below so it starts at the correct physical size">Reset Position</button>
+    <button id="btnFitProof" title="Scale the proof so it fits entirely inside the visible window, ignoring DPI - use this if the DPI-based size looks wrong, then fine-tune with Position Proof">Fit to Window</button>
     <label class="dpi-field" title="The proof JPEG's own resolution - read from its file when possible, otherwise defaulted to a common 300dpi guess. Used with the job's dpi to scale the proof to the correct physical size - edit this if it's wrong for your proof">
       Proof <input type="number" id="proofDpi" min="1" step="1" placeholder="dpi"> dpi
     </label>
