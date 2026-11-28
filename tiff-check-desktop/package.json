@@ -1,0 +1,38 @@
+{
+  "name": "tiff-plate-checker",
+  "productName": "TIFF Plate Checker",
+  "version": "1.0.0",
+  "description": "Standalone desktop app for manually checking separated TIFF plates against print/proof, for the engraving QC workflow.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "optionalDependencies": {
+    "dmg-license": "^1.0.11"
+  },
+  "build": {
+    "appId": "com.packaging.tiffplatechecker",
+    "productName": "TIFF Plate Checker",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "renderer/**/*"],
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "category": "public.app-category.graphics-design"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

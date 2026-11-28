@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TIFF Plate Checker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ SCREEN 1: LOAD JOB FOLDER ============ -->
+<section id="screen-load" class="screen">
+  <div class="topbar">
+    <h1>TIFF Plate Checker</h1>
+    <span class="sub">manual separation check vs. print / proof</span>
+  </div>
+  <div class="load-wrap">
+    <div class="drop" id="dropZone">
+      <p style="color:#e7e9ec;margin:0 0 10px;font-size:15px;">Select the job folder</p>
+      <p>Pick the folder that holds the separated TIFF plates (and, if you have one, the prepress JPEG proof). Everything stays on this computer — nothing is uploaded.</p>
+      <input type="file" id="folderInput" webkitdirectory multiple style="display:none">
+      <button class="primary" id="btnChooseFolder">Choose Job Folder…</button>
+    </div>
+    <p id="loadStatus"></p>
+  </div>
+</section>
+
+<!-- ============ SCREEN 2: RESOLUTION CONFIRM (shown only if mixed) ============ -->
+<section id="screen-res" class="screen hidden">
+  <div class="topbar">
+    <h1>Multiple resolutions found</h1>
+    <span class="spacer"></span>
+    <button id="resBack">Back</button>
+    <button class="primary" id="resContinue">Continue</button>
+  </div>
+  <div class="assign-body">
+    <p>This folder has TIFFs at more than one pixel size. Pick which set is the one to check (normally the 200&nbsp;dpi set) — the others are usually hi-res originals or thumbnails and would misalign if mixed in.</p>
+    <div class="res-groups" id="resGroups"></div>
+  </div>
+</section>
+
+<!-- ============ SCREEN 3: ASSIGN COLORS ============ -->
+<section id="screen-assign" class="screen hidden">
+  <div class="topbar">
+    <h1>Assign a color to each plate</h1>
+    <span class="sub" id="assignCount"></span>
+    <span class="spacer"></span>
+    <button id="btnLoadSession">Load Saved Colors…</button>
+    <input type="file" id="sessionInput" accept=".json" style="display:none">
+    <button id="assignBack">Back</button>
+    <button class="primary" id="assignContinue">Open Composite View</button>
+  </div>
+  <div class="assign-body">
+    <div class="assign-grid" id="assignGrid"></div>
+  </div>
+</section>
+
+<!-- ============ SCREEN 4: COMPOSITE VIEWER ============ -->
+<section id="screen-viewer" class="screen hidden">
+  <div class="topbar">
+    <h1>Composite Check</h1>
+    <span class="sub" id="viewerJobName"></span>
+    <span class="spacer"></span>
+    <button id="btnSaveSession">Save Colors</button>
+    <button id="btnExportPng">Export Snapshot</button>
+    <button id="btnCompareJpeg">Compare with JPEG…</button>
+    <button id="btnBackToAssign">← Edit Colors</button>
+  </div>
+  <div class="viewer-body">
+    <div class="layer-panel">
+      <p style="color:#9aa1ab;font-size:11px;margin:4px 2px 8px;">Plate order (drag to resequence — top = printed last / on top)</p>
+      <div id="layerList"></div>
+    </div>
+    <div class="canvas-stage" id="canvasStage">
+      <canvas id="mainCanvas"></canvas>
+      <svg id="rulerSvg"></svg>
+    </div>
+    <div class="checklist-panel">
+      <div class="cl-section">
+        <label class="cl-label">Checked by</label>
+        <input type="text" id="operatorName" placeholder="Operator name">
+      </div>
+      <div class="cl-section">
+        <div class="cl-row-head">
+          <label class="cl-label">Prepress checklist</label>
+          <span class="cl-progress" id="clProgress"></span>
+        </div>
+        <div id="checklistItems"></div>
+        <div class="cl-add-row">
+          <input type="text" id="clNewItem" placeholder="Add a check item…">
+          <button id="clAddBtn">+</button>
+        </div>
+      </div>
+      <button class="primary" id="btnSaveReport" style="width:100%;margin-top:8px;">Save QC Report</button>
+    </div>
+  </div>
+  <div class="bottom-bar" id="bottomBar">
+    <div class="zoom-controls">
+      <button id="zoomOut">−</button>
+      <span id="zoomLabel">100%</span>
+      <button id="zoomIn">+</button>
+      <button id="zoomFit">Fit</button>
+    </div>
+    <button id="btnMirror" title="Flip the view to match how you're checking it — reverse-read engraving files vs. a normal-reading proof">View: Surface (normal)</button>
+    <button id="btnRuler" title="Click-drag on the canvas to measure a distance">Ruler</button>
+    <button id="btnFastPreview" title="Full resolution by default. Turn this on only if toggling colors feels slow on this job — it trades fine detail for speed.">Fast Preview: Off</button>
+    <div class="sep"></div>
+    <button id="allOn">All on</button>
+    <button id="allOff">All off</button>
+    <div class="sep"></div>
+    <div id="togglePills" style="display:flex;gap:6px;overflow-x:auto;"></div>
+  </div>
+</section>
+
+<!-- ============ COMPARE-WITH-JPEG OVERLAY ============ -->
+<div id="compareOverlay" class="compare-wrap hidden">
+  <div class="ctop">
+    <strong>Compare: TIFF composite vs. JPEG proof</strong>
+    <span class="chint">Press <b>Space</b> or click the canvas to blink · drag the slider to wipe/blend</span>
+    <span class="spacer"></span>
+    <div class="slider-wrap">
+      <span style="color:#9aa1ab;font-size:11px;">Composite</span>
+      <input type="range" id="compareSlider" min="0" max="100" value="0">
+      <span style="color:#9aa1ab;font-size:11px;">JPEG</span>
+    </div>
+    <button id="compareClose">Close</button>
+  </div>
+  <div class="compare-stage" id="compareStage">
+    <canvas id="compareCanvas"></canvas>
+  </div>
+</div>
+
+<!-- color picker popover template (positioned dynamically) -->
+<div id="colorPopover" class="popover hidden"></div>
+
+<script src="vendor/pako_inflate.min.js"></script>
+<script src="vendor/UTIF.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
