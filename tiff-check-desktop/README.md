@@ -3,7 +3,8 @@
 A standalone Windows/Mac app version of the browser tool in `../tiff-check/`,
 for the engraving department's manual QC check of separated TIFF plates.
 Same checking workflow (color assignment, multiply-blend composite, mirror
-view, ruler, prepress checklist, JPEG compare) — the desktop version adds:
+view, ruler, JPEG compare with DPI auto-scaling and auto-blink) — the
+desktop version adds:
 
 - A native "Choose Job Folder…" dialog instead of a browser file picker.
 - **Reports and saved colors write straight to disk**, automatically, into

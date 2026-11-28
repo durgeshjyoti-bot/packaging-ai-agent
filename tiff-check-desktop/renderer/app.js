@@ -1461,7 +1461,10 @@ function openCompareWithBytes(bytes) {
   const jobDpi = state.plates[0] && state.plates[0].dpi;
   $("jobDpiHint").textContent = jobDpi ? `Job: ~${Math.round(jobDpi)} dpi` : "";
   const parsedDpi = parseJpegDpi(bytes);
-  $("proofDpi").value = parsedDpi ? Math.round(parsedDpi.x) : "";
+  // 300dpi is far and away the most common proof export resolution - a far
+  // better default starting guess than leaving the field blank (which would
+  // mean "assume same dpi as the job", rarely true) when nothing is embedded
+  $("proofDpi").value = parsedDpi ? Math.round(parsedDpi.x) : 300;
 
   const img = new Image();
   img.onload = () => {
@@ -1547,7 +1550,29 @@ window.addEventListener("keydown", (e) => {
     drawCompare();
   }
 });
-$("compareClose").addEventListener("click", () => $("compareOverlay").classList.add("hidden"));
+let autoBlinkTimer = null;
+function stopAutoBlink() {
+  if (!autoBlinkTimer) return;
+  clearInterval(autoBlinkTimer);
+  autoBlinkTimer = null;
+  $("btnAutoBlink").classList.remove("active");
+  $("btnAutoBlink").textContent = "▶ Auto Blink";
+}
+$("btnAutoBlink").addEventListener("click", () => {
+  if (autoBlinkTimer) { stopAutoBlink(); return; }
+  $("btnAutoBlink").classList.add("active");
+  $("btnAutoBlink").textContent = "■ Stop Blink";
+  autoBlinkTimer = setInterval(() => {
+    state.compare.mode = "blink";
+    state.compare.blinkShowJpeg = !state.compare.blinkShowJpeg;
+    drawCompare();
+  }, 600);
+});
+
+$("compareClose").addEventListener("click", () => {
+  $("compareOverlay").classList.add("hidden");
+  stopAutoBlink();
+});
 
 $("btnPositionProof").addEventListener("click", () => {
   state.compare.positioning = !state.compare.positioning;
