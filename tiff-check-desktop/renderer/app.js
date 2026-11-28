@@ -23,6 +23,7 @@ const state = {
   operatorName: "",
   vegLogoChecked: false,
   densityMode: false,
+  densitySampleRadius: 0, // 0 = Point Sample (exact pixel), matching Photoshop's eyedropper "Sample Size" default
   fastPreview: false, // opt-in only: full resolution is the default so fine detail (barcodes, small text, trapping) is never silently blurred
   // Deep-zoom crop mode (see evaluateCropMode()): for a plate too large for a
   // single safe canvas, mainCanvas normally holds the whole (downsampled)
@@ -1182,20 +1183,21 @@ window.addEventListener("resize", () => { if (state.scale != null) return; apply
 // rendered/tinted composite), so it's the real ink percentage, not a color
 // guess from an RGB sample.
 //
-// At a real native pixel (realPixelZoom >= 1, i.e. zoomed in to 1:1 or
-// closer - always true in deep-zoom crop mode), this reads the exact single
-// pixel, which is what you want for verifying dot edges/trapping. But when
-// zoomed OUT (common on a huge job before zooming in on a specific spot),
-// one screen pixel already represents many real file pixels, averaged
-// together for display - reading a single exact pixel there doesn't match
-// what's visually on screen at all, and can look like noise, especially on
-// a halftoned/textured area, since it reports whichever one native pixel
-// happened to land under the cursor rather than what the eye is seeing.
-// Averaging over that same neighborhood keeps the reading consistent with
-// the visible color at every zoom level.
+// This deliberately works the same way Photoshop's own Color Sampler/
+// eyedropper does: the reading is of the real document pixel(s) and never
+// changes just because you zoomed in or out - zoom is only a viewing aid.
+// An earlier version tied the sample area to the current zoom level, which
+// seemed like it should help but actually broke that guarantee: the same
+// physical point could read differently depending only on how far you'd
+// zoomed, which is confusing and isn't how any real densitometer/eyedropper
+// behaves. "Sample Size" (next to the Density button) is a fixed, explicit
+// choice instead, exactly like Photoshop's own eyedropper option of the
+// same name - Point Sample reads one exact pixel (the default, and the
+// right choice for checking an exact dot/edge); 3x3/5x5 average a small
+// fixed real-pixel neighborhood around it, for a steadier reading on
+// halftoned/textured artwork. Either way, the number is zoom-independent.
 function densityAtPoint(fx, fy) {
-  const realPixelZoom = state.scale / state.cropScale;
-  const boxRadius = realPixelZoom >= 1 ? 0 : Math.min(24, Math.round(0.5 / realPixelZoom));
+  const radius = state.densitySampleRadius || 0;
   return [...state.order].reverse().map(id => {
     const p = plateById(id);
     if (p.isComposite) return null;
@@ -1203,17 +1205,7 @@ function densityAtPoint(fx, fy) {
     if (fxi < 0 || fyi < 0 || fxi >= p.width || fyi >= p.height) {
       return { name: p.name, percent: null, colorHex: cmykHex(p.color) };
     }
-    let ink;
-    if (boxRadius > 0) {
-      ink = averageInkInBox(p, fxi, fyi, boxRadius);
-    } else if (p.fullGray) {
-      // true native pixel - exact, not an area average
-      ink = 255 - p.fullGray[fyi * p.width + fxi];
-    } else {
-      const rx = Math.round(fx * p.renderWidth / p.width);
-      const ry = Math.round(fy * p.renderHeight / p.height);
-      ink = 255 - p.rgba[(ry * p.renderWidth + rx) * 4];
-    }
+    const ink = averageInkInBox(p, fxi, fyi, radius);
     return { name: p.name, percent: Math.round((ink / 255) * 100), colorHex: cmykHex(p.color) };
   }).filter(Boolean);
 }
@@ -1246,7 +1238,11 @@ $("btnDensity").addEventListener("click", () => {
   state.densityMode = !state.densityMode;
   $("btnDensity").classList.toggle("active", state.densityMode);
   $("canvasStage").classList.toggle("density-active", state.densityMode);
+  $("densitySampleSize").classList.toggle("hidden", !state.densityMode);
   if (!state.densityMode) $("densityMarker").classList.remove("visible");
+});
+$("densitySampleSize").addEventListener("change", (e) => {
+  state.densitySampleRadius = +e.target.value;
 });
 
 // live cursor-position-in-pixels (and, in Density mode, per-plate ink %)

@@ -309,6 +309,11 @@ input[type="text"], input[type="number"] {
 .zoom-controls { display: flex; align-items: center; gap: 4px; }
 .zoom-controls span { color: var(--text-dim); min-width: 46px; text-align: center; font-size: 11px; }
 
+#densitySampleSize {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 6px 8px; font: 12px inherit; cursor: pointer;
+}
+
 /* ---------- Compare overlay ---------- */
 .compare-wrap {
   position: fixed; inset: 0; background: #000; z-index: 40;

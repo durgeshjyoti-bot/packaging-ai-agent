@@ -110,6 +110,12 @@
     <div class="sep"></div>
     <button id="btnRuler" title="Click-drag on the canvas to measure a distance">⟺ Ruler</button>
     <button id="btnDensity" title="Hover the canvas to read each plate's ink density (%) at that point, like an eyedropper">⏚ Density</button>
+    <select id="densitySampleSize" title="Same as Photoshop's eyedropper 'Sample Size' - the reading never changes with zoom, only with this. Point Sample = the exact pixel; the averages smooth out fine halftone texture." class="hidden">
+      <option value="0">Point Sample</option>
+      <option value="1">3×3 Average</option>
+      <option value="2">5×5 Average</option>
+      <option value="5">11×11 Average</option>
+    </select>
     <button id="btnFastPreview" title="Full resolution by default. Turn this on only if toggling colors feels slow on this job — it trades fine detail for speed.">Fast Preview: Off</button>
     <div class="sep"></div>
     <button id="allOn">All on</button>
